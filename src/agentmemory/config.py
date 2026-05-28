@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     db_path: Path = DEFAULT_DATA_DIR / "agentmemory.sqlite3"
     secret: str = ""
     log_level: str = "INFO"
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = ""
 
     def safe_summary(self) -> dict[str, Any]:
         return {
@@ -32,9 +38,31 @@ class Settings(BaseSettings):
             "secret_configured": bool(self.secret),
             "secret": "<redacted>" if self.secret else "",
             "log_level": self.log_level,
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": self.llm_base_url,
+                "model": self.llm_model,
+                "api_key_configured": bool(self.llm_api_key),
+            },
+            "embedding": {
+                "provider": "openai-compatible",
+                "base_url": self.embedding_base_url,
+                "model": self.embedding_model,
+                "api_key_configured": bool(self.embedding_api_key),
+            },
         }
+
+    def missing_ai_settings(self) -> list[str]:
+        required = {
+            "AGENTMEMORY_LLM_BASE_URL": self.llm_base_url,
+            "AGENTMEMORY_LLM_API_KEY": self.llm_api_key,
+            "AGENTMEMORY_LLM_MODEL": self.llm_model,
+            "AGENTMEMORY_EMBEDDING_BASE_URL": self.embedding_base_url,
+            "AGENTMEMORY_EMBEDDING_API_KEY": self.embedding_api_key,
+            "AGENTMEMORY_EMBEDDING_MODEL": self.embedding_model,
+        }
+        return [name for name, value in required.items() if not value]
 
 
 def get_settings() -> Settings:
     return Settings()
-

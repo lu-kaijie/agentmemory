@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from agentmemory.config import Settings, get_settings
 from agentmemory.core import MemoryCoreService
 from agentmemory.core.models import ObserveRequest, RememberRequest
+from agentmemory.providers import create_provider_bundle
 from agentmemory.state import StateKV
 from agentmemory.version import __version__
 
@@ -15,6 +16,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = resolved
     app.state.kv = StateKV(resolved.db_path)
     app.state.memory_core = MemoryCoreService(app.state.kv)
+    app.state.providers = create_provider_bundle(resolved)
 
     @app.get("/agentmemory/livez")
     def livez() -> dict[str, str]:
@@ -34,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "version": __version__,
             "status": status,
             "database": {"ok": database_ok},
+            "providers": app.state.providers.health_summary(),
             "config": resolved.safe_summary(),
         }
         if error:

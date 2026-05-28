@@ -1,11 +1,11 @@
 from fastapi.testclient import TestClient
 
 from agentmemory.api import create_app
-from agentmemory.config import Settings
+from conftest import ai_settings
 
 
 def test_rest_observe_remember_and_list_endpoints(tmp_path):
-    app = create_app(Settings(db_path=tmp_path / "api.sqlite3"))
+    app = create_app(ai_settings(tmp_path / "api.sqlite3"))
     client = TestClient(app)
 
     observe = client.post(

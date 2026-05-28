@@ -9,6 +9,7 @@ from agentmemory.api.app import create_app
 from agentmemory.config import get_settings
 from agentmemory.core.models import ObserveRequest, RememberRequest
 from agentmemory.core.service import MemoryCoreService
+from agentmemory.providers import MissingAIProviderSettings, create_provider_bundle, require_ai_settings
 from agentmemory.state import StateKV
 
 app = typer.Typer(help="AgentMemory local service")
@@ -36,6 +37,28 @@ def doctor() -> None:
     typer.echo(f"Port: {settings.port}")
     typer.echo(f"Database: {settings.db_path}")
     typer.echo(f"Secret configured: {'yes' if settings.secret else 'no'}")
+    try:
+        providers = create_provider_bundle(settings)
+    except MissingAIProviderSettings as exc:
+        typer.echo(f"AI providers: missing ({', '.join(exc.missing_settings)})")
+        raise typer.Exit(code=1) from exc
+
+    provider_status = providers.health_summary()
+    llm = provider_status["llm"]
+    embedding = provider_status["embedding"]
+    typer.echo(f"LLM provider: {llm['provider']} model={llm['model']} ready={llm['ready']}")
+    typer.echo(
+        "LLM API key configured: "
+        f"{'yes' if llm['apiKeyConfigured'] else 'no'}",
+    )
+    typer.echo(
+        f"Embedding provider: {embedding['provider']} "
+        f"model={embedding['model']} ready={embedding['ready']}",
+    )
+    typer.echo(
+        "Embedding API key configured: "
+        f"{'yes' if embedding['apiKeyConfigured'] else 'no'}",
+    )
 
     kv = StateKV(settings.db_path)
     kv.probe()
@@ -45,6 +68,7 @@ def doctor() -> None:
 
 def _memory_core() -> MemoryCoreService:
     settings = get_settings()
+    require_ai_settings(settings)
     return MemoryCoreService(StateKV(settings.db_path))
 
 
