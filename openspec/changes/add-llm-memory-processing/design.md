@@ -28,7 +28,7 @@
 
 ### 1. Observe 后同步处理
 
-`observe` 完成原始 observation 保存后同步调用 LLM：
+`observe` 完成原始 observation 保存后同步调用 LLM。这个决策只适用于当前 Skill + CLI/API 的低频入口，不适用于未来 hook 高频采集入口。
 
 1. 创建 `llmProcessingJob`，状态为 `running`。
 2. 调用 `llm.summarize` 生成 summary。
@@ -38,6 +38,18 @@
 6. 写入 audit。
 
 同步处理可以保证第一版写入后立即有 LLM 结果，便于验收和后续功能复用。后续后台任务 change 可以把同一套 service 方法迁移到异步 worker。
+
+### 1.1 触发频率约束
+
+因为每次 `observe` 都会触发真实 LLM 调用，Skill 必须把 `observe` 定义为阶段性动作，而不是每步动作：
+
+- 完成一次有价值的探索后调用。
+- 完成一个重要修改并验证后调用。
+- 发现关键问题或关键结论后调用。
+- 用户纠正方向或明确要求记录阶段总结后调用。
+- 不在每次文件读取、每次编辑、每次命令执行、每次测试后调用。
+
+当前 change 不实现 hook。未来如果加入 hook，高频 PostToolUse 事件不得默认同步调用本流程，应通过异步 job、批处理、节流或显式开关处理。
 
 ### 2. LLM 失败不丢 observation
 
@@ -92,6 +104,8 @@ Summary 保存到 `summaries`，字段包含：
 ## Risks / Trade-offs
 
 - 同步 LLM 会增加 observe 延迟 -> 第一版优先保证 AI 结果立即可验收，后续后台任务优化。
+- Skill 写得过于激进会拖慢 agent -> 在 Skill 规则中限制 `observe` 只能低频、阶段性触发。
+- 未来 hook 可能产生高频 observation -> hook 不得默认同步触发 LLM，必须引入节流/队列/显式开关。
 - LLM 输出 JSON 不稳定 -> provider/service 需要容错，把非 JSON 输出包装成单条 candidate。
 - Candidate memory 可能有误 -> 不自动保存为正式 memory，保留人工/后续治理入口。
 - 测试真实 LLM 有网络和成本 -> 只对 provider 层保留真实调用测试；service 行为测试使用受控 stub，避免每个单元测试都调用远程模型。

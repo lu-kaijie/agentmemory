@@ -14,6 +14,10 @@
   - observation 保存成功后必须触发 LLM processing。
   - LLM processing 成功后保存 summary 和 candidate memories。
   - LLM processing 失败时 observation 保留，但 processing 状态必须记录为 failed，并写入 audit。
+- 明确性能边界：
+  - Skill 只能在阶段性节点调用 `observe`。
+  - 不允许要求 agent 在每次工具调用、每次文件读取或每次编辑后调用 `observe`。
+  - 未来 hook 如需采集高频事件，不能默认同步调用 LLM，必须走队列、节流或显式开关。
 - 扩展 KV scope：
   - `summaries`
   - `memoryCandidates`

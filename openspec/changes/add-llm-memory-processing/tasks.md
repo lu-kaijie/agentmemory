@@ -40,5 +40,7 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Run pytest for all tests
-- [ ] 6.2 Verify OpenSpec status is complete for `add-llm-memory-processing`
+- [ ] 6.1 Document Skill trigger guidance for low-frequency observe calls
+- [ ] 6.2 Add tests or documentation checks covering low-frequency trigger guidance
+- [ ] 6.3 Run pytest for all tests
+- [ ] 6.4 Verify OpenSpec status is complete for `add-llm-memory-processing`
