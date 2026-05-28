@@ -4,12 +4,12 @@
 
 系统 SHALL 支持 LLM 与 embedding 的独立 provider 配置。
 
-配置 MUST 支持 `fake` 和 `openai` provider。LLM 与 embedding MUST 分别支持 base URL、API key 和 model 配置。系统 MUST 在配置摘要中隐藏 API key 明文。
+系统 MUST 使用 OpenAI-compatible provider。LLM 与 embedding MUST 分别支持 base URL、API key 和 model 配置。系统 MUST 在配置摘要中隐藏 API key 明文。
 
-#### Scenario: Fake provider default
+#### Scenario: Missing provider configuration blocks startup
 
 - **WHEN** 用户未配置 LLM 或 embedding provider
-- **THEN** 系统使用 fake provider，并且服务可以正常启动
+- **THEN** 系统拒绝进入可用运行状态，并报告缺失配置
 
 #### Scenario: OpenAI-compatible provider configuration
 
@@ -48,34 +48,18 @@
 - **WHEN** 调用方提交多段文本
 - **THEN** provider 返回同等数量且顺序一致的 embedding 向量
 
-### Requirement: Fake Providers
-
-系统 SHALL 提供 fake LLM provider 和 fake embedding provider。
-
-Fake provider MUST 输出稳定结果，以支持离线开发和单元测试。
-
-#### Scenario: Fake LLM deterministic output
-
-- **WHEN** 使用 fake LLM provider 对同一输入调用摘要或记忆提炼
-- **THEN** 系统返回稳定、可断言的结果
-
-#### Scenario: Fake embedding deterministic output
-
-- **WHEN** 使用 fake embedding provider 对同一文本生成 embedding
-- **THEN** 系统返回稳定且维度固定的向量
-
 ### Requirement: OpenAI-Compatible Providers
 
 系统 SHALL 提供 OpenAI-compatible LLM provider 和 embedding provider。
 
-OpenAI-compatible provider MUST 使用配置中的 base URL、API key 和 model。缺少必要配置时，系统 MUST 报告 provider 未就绪，而不是泄露密钥或导致服务启动失败。
+OpenAI-compatible provider MUST 使用配置中的 base URL、API key 和 model。缺少必要配置时，系统 MUST 阻止服务进入可用运行状态，并且 MUST NOT 泄露密钥。
 
 #### Scenario: Missing OpenAI API key
 
-- **WHEN** provider 配置为 `openai` 但 API key 为空
-- **THEN** provider 状态为未就绪，并说明缺少 API key
+- **WHEN** LLM 或 embedding API key 为空
+- **THEN** 系统启动失败，并说明缺少 API key
 
 #### Scenario: Create OpenAI-compatible clients
 
-- **WHEN** provider 配置为 `openai` 且必要配置完整
+- **WHEN** LLM 与 embedding 的必要配置完整
 - **THEN** 系统可以创建 LLM 与 embedding provider 实例

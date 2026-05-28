@@ -6,10 +6,10 @@
 
 响应 MUST 包含 provider 名称、模型名、是否已配置密钥、是否就绪和最近错误。响应 MUST NOT 返回 API key 明文。
 
-#### Scenario: Health reports fake providers
+#### Scenario: Health reports configured providers
 
-- **WHEN** 系统使用默认 fake providers
-- **THEN** health 响应显示 LLM 与 embedding provider 为 fake 且就绪
+- **WHEN** 系统已配置 LLM 与 embedding provider
+- **THEN** health 响应显示 LLM 与 embedding provider 为 openai-compatible 且就绪
 
 #### Scenario: Health redacts provider secrets
 
