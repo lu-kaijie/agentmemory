@@ -4,11 +4,12 @@ from typer.testing import CliRunner
 
 import agentmemory.cli as cli_module
 from agentmemory.cli import app
-from conftest import StubLLMProvider
+from conftest import StubEmbeddingProvider, StubLLMProvider
 
 
 class _StubProviderBundle:
     llm = StubLLMProvider()
+    embedding = StubEmbeddingProvider()
 
     def health_summary(self):
         return {
@@ -38,6 +39,7 @@ def _set_ai_env(monkeypatch):
 
 def test_doctor_command_runs(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTMEMORY_DB_PATH", str(tmp_path / "doctor.sqlite3"))
+    monkeypatch.setenv("AGENTMEMORY_VECTOR_DB_PATH", str(tmp_path / "vector"))
     _set_ai_env(monkeypatch)
 
     result = CliRunner().invoke(app, ["doctor"])
@@ -54,6 +56,7 @@ def test_doctor_command_runs(monkeypatch, tmp_path):
 def test_doctor_fails_when_ai_settings_missing(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AGENTMEMORY_DB_PATH", str(tmp_path / "doctor.sqlite3"))
+    monkeypatch.setenv("AGENTMEMORY_VECTOR_DB_PATH", str(tmp_path / "vector"))
 
     result = CliRunner().invoke(app, ["doctor"])
 
@@ -64,6 +67,7 @@ def test_doctor_fails_when_ai_settings_missing(monkeypatch, tmp_path):
 
 def test_memory_core_cli_commands(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTMEMORY_DB_PATH", str(tmp_path / "cli.sqlite3"))
+    monkeypatch.setenv("AGENTMEMORY_VECTOR_DB_PATH", str(tmp_path / "vector"))
     _set_ai_env(monkeypatch)
     monkeypatch.setattr(cli_module, "create_provider_bundle", lambda _settings: _StubProviderBundle())
     runner = CliRunner()
@@ -109,6 +113,11 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     summaries = runner.invoke(app, ["summaries", "--json"])
     candidates = runner.invoke(app, ["memory-candidates", "--json"])
     jobs = runner.invoke(app, ["llm-processing-jobs", "--json"])
+    search = runner.invoke(app, ["search", "CLI", "--json"])
+    smart = runner.invoke(app, ["smart-search", "CLI memory", "--json"])
+    index_status = runner.invoke(app, ["index", "status", "--json"])
+    index_repair = runner.invoke(app, ["index", "repair", "--json"])
+    index_rebuild = runner.invoke(app, ["index", "rebuild", "--json"])
 
     assert observe.exit_code == 0
     assert "Observation saved:" in observe.output
@@ -120,6 +129,11 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert summaries.exit_code == 0
     assert candidates.exit_code == 0
     assert jobs.exit_code == 0
+    assert search.exit_code == 0
+    assert smart.exit_code == 0
+    assert index_status.exit_code == 0
+    assert index_repair.exit_code == 0
+    assert index_rebuild.exit_code == 0
 
     session_items = json.loads(sessions.output)["sessions"]
     memory_items = json.loads(memories.output)["memories"]
@@ -127,6 +141,9 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     summary_items = json.loads(summaries.output)["summaries"]
     candidate_items = json.loads(candidates.output)["memoryCandidates"]
     job_items = json.loads(jobs.output)["llmProcessingJobs"]
+    search_items = json.loads(search.output)["results"]
+    smart_payload = json.loads(smart.output)
+    index_payload = json.loads(index_status.output)
 
     assert session_items[0]["id"] == "ses_cli"
     assert session_items[0]["observationCount"] == 1
@@ -135,11 +152,16 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert summary_items[0]["content"] == "Stub summary"
     assert candidate_items[0]["status"] == "candidate"
     assert job_items[0]["status"] == "done"
+    assert search_items
+    assert smart_payload["answer"] == "stub explanation"
+    assert smart_payload["evidence"]
+    assert index_payload["documents"] >= 2
 
 
 def test_memory_core_cli_commands_require_ai_settings(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AGENTMEMORY_DB_PATH", str(tmp_path / "cli.sqlite3"))
+    monkeypatch.setenv("AGENTMEMORY_VECTOR_DB_PATH", str(tmp_path / "vector"))
 
     result = CliRunner().invoke(app, ["observe", "--content", "should fail"])
 

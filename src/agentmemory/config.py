@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     embedding_base_url: str = ""
     embedding_api_key: str = ""
     embedding_model: str = ""
+    vector_db_path: Path = DEFAULT_DATA_DIR / "vector"
+    vector_table: str = "memory_vectors"
 
     def safe_summary(self) -> dict[str, Any]:
         return {
@@ -49,6 +51,10 @@ class Settings(BaseSettings):
                 "base_url": self.embedding_base_url,
                 "model": self.embedding_model,
                 "api_key_configured": bool(self.embedding_api_key),
+            },
+            "vector": {
+                "db_path": str(self.vector_db_path),
+                "table": self.vector_table,
             },
         }
 

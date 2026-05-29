@@ -62,3 +62,31 @@ class StubLLMProvider:
 
     def update_wiki(self, page_title: str, current_content: str, evidence: list[dict[str, Any]]) -> str:
         return "stub wiki update"
+
+
+class StubEmbeddingProvider:
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+
+    def status(self) -> ProviderStatus:
+        return ProviderStatus(
+            model="stub-embedding",
+            baseUrl="stub://embedding",
+            apiKeyConfigured=True,
+            ready=True,
+        )
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if self.fail:
+            raise RuntimeError("stub embedding failure")
+        return [_vector_for_text(text) for text in texts]
+
+
+def _vector_for_text(text: str) -> list[float]:
+    lower = text.lower()
+    return [
+        float(len(lower) % 17) / 17.0,
+        1.0 if "fastapi" in lower else 0.0,
+        1.0 if "llm" in lower or "memory" in lower else 0.0,
+        1.0 if "search" in lower or "rag" in lower else 0.0,
+    ]

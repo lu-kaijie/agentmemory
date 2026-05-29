@@ -4,7 +4,8 @@ from fastapi import FastAPI
 
 from agentmemory.config import Settings, get_settings
 from agentmemory.core import MemoryCoreService
-from agentmemory.core.models import ObserveRequest, RememberRequest
+from agentmemory.core.models import ObserveRequest, RememberRequest, SearchRequest, SmartSearchRequest
+from agentmemory.core.search import MemorySearchService
 from agentmemory.providers import create_provider_bundle
 from agentmemory.state import StateKV
 from agentmemory.version import __version__
@@ -16,7 +17,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = resolved
     app.state.kv = StateKV(resolved.db_path)
     app.state.providers = create_provider_bundle(resolved)
-    app.state.memory_core = MemoryCoreService(app.state.kv, llm=app.state.providers.llm)
+    app.state.search_service = MemorySearchService(
+        app.state.kv,
+        settings=resolved,
+        embedding=app.state.providers.embedding,
+        llm=app.state.providers.llm,
+    )
+    app.state.memory_core = MemoryCoreService(
+        app.state.kv,
+        llm=app.state.providers.llm,
+        search=app.state.search_service,
+    )
 
     @app.get("/agentmemory/livez")
     def livez() -> dict[str, str]:
@@ -37,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": status,
             "database": {"ok": database_ok},
             "providers": app.state.providers.health_summary(),
+            "index": app.state.memory_core.index_status().model_dump(),
             "config": resolved.safe_summary(),
         }
         if error:
@@ -82,5 +94,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def llm_processing_jobs() -> dict[str, object]:
         items = app.state.memory_core.list_llm_processing_jobs()
         return {"llmProcessingJobs": [item.model_dump() for item in items]}
+
+    @app.post("/agentmemory/search")
+    def search(payload: SearchRequest) -> dict[str, object]:
+        return app.state.memory_core.search(payload).model_dump()
+
+    @app.post("/agentmemory/smart-search")
+    def smart_search(payload: SmartSearchRequest) -> dict[str, object]:
+        return app.state.memory_core.smart_search(payload).model_dump()
+
+    @app.get("/agentmemory/index/status")
+    def index_status() -> dict[str, object]:
+        return app.state.memory_core.index_status().model_dump()
+
+    @app.post("/agentmemory/index/rebuild")
+    def index_rebuild() -> dict[str, object]:
+        return app.state.memory_core.index_rebuild()
+
+    @app.post("/agentmemory/index/repair")
+    def index_repair() -> dict[str, object]:
+        return app.state.memory_core.index_repair()
 
     return app

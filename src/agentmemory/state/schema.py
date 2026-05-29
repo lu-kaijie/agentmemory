@@ -6,6 +6,8 @@ class KV:
     summaries = "mem:summaries"
     memory_candidates = "mem:memoryCandidates"
     llm_processing_jobs = "mem:llmProcessingJobs"
+    search_documents = "mem:searchDocuments"
+    index_jobs = "mem:indexJobs"
     audit = "mem:audit"
 
     @staticmethod

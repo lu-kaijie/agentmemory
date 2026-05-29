@@ -15,15 +15,22 @@ from agentmemory.core.models import (
     SummaryRecord,
 )
 from agentmemory.core.processing import create_running_job, process_observation
+from agentmemory.core.search import MemorySearchService, memory_document, observation_document, summary_document
 from agentmemory.providers import LLMProvider
 from agentmemory.state import StateKV
 from agentmemory.state.schema import KV
 
 
 class MemoryCoreService:
-    def __init__(self, kv: StateKV, llm: LLMProvider | None = None):
+    def __init__(
+        self,
+        kv: StateKV,
+        llm: LLMProvider | None = None,
+        search: MemorySearchService | None = None,
+    ):
         self.kv = kv
         self.llm = llm
+        self.search_service = search
 
     def observe(self, request: ObserveRequest) -> ObserveResponse:
         now = utc_now_iso()
@@ -61,6 +68,8 @@ class MemoryCoreService:
 
         self.kv.set(KV.sessions, session.id, session.model_dump())
         self.kv.set(KV.observations(session.id), observation.id, observation.model_dump())
+        if self.search_service:
+            self.search_service.index_document(observation_document(observation))
         self._record_audit(
             AuditRecord(
                 id=generate_id("aud"),
@@ -85,6 +94,8 @@ class MemoryCoreService:
             )
             if summary:
                 self.kv.set(KV.summaries, summary.id, summary.model_dump())
+                if self.search_service:
+                    self.search_service.index_document(summary_document(summary, observation))
             for candidate in memory_candidates:
                 self.kv.set(KV.memory_candidates, candidate.id, candidate.model_dump())
             self.kv.set(KV.llm_processing_jobs, processing_job.id, processing_job.model_dump())
@@ -130,6 +141,8 @@ class MemoryCoreService:
             createdAt=now,
         )
         self.kv.set(KV.memories, memory.id, memory.model_dump())
+        if self.search_service:
+            self.search_service.index_document(memory_document(memory))
         self._record_audit(
             AuditRecord(
                 id=generate_id("aud"),
@@ -166,6 +179,31 @@ class MemoryCoreService:
     def list_llm_processing_jobs(self) -> list[LLMProcessingJobRecord]:
         items = [LLMProcessingJobRecord.model_validate(item) for item in self.kv.list(KV.llm_processing_jobs)]
         return sorted(items, key=lambda item: item.startedAt)
+
+    def search(self, request):
+        if not self.search_service:
+            raise RuntimeError("search service is not configured")
+        return self.search_service.search(request)
+
+    def smart_search(self, request):
+        if not self.search_service:
+            raise RuntimeError("search service is not configured")
+        return self.search_service.smart_search(request)
+
+    def index_status(self):
+        if not self.search_service:
+            raise RuntimeError("search service is not configured")
+        return self.search_service.status()
+
+    def index_rebuild(self):
+        if not self.search_service:
+            raise RuntimeError("search service is not configured")
+        return self.search_service.rebuild()
+
+    def index_repair(self):
+        if not self.search_service:
+            raise RuntimeError("search service is not configured")
+        return self.search_service.repair()
 
     def _record_audit(self, record: AuditRecord) -> None:
         self.kv.set(KV.audit, record.id, record.model_dump())

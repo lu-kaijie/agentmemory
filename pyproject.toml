@@ -10,6 +10,7 @@ readme = "PROJECT.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1.0",
+  "lancedb>=0.16,<1.0",
   "openai>=1.0,<2.0",
   "pydantic>=2.8,<3.0",
   "pydantic-settings>=2.4,<3.0",
@@ -30,4 +31,3 @@ agentmemory = "agentmemory.cli:app"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-

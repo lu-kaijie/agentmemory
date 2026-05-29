@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import DateTime, Text, create_engine, select
+from sqlalchemy import DateTime, Text, create_engine, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -38,7 +38,30 @@ class StateKV:
             connect_args={"check_same_thread": False},
         )
         Base.metadata.create_all(self.engine)
+        self._ensure_fts5()
         self._session_factory = sessionmaker(self.engine, expire_on_commit=False, future=True)
+
+    def _ensure_fts5(self) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+                        document_id UNINDEXED,
+                        source_type UNINDEXED,
+                        source_id UNINDEXED,
+                        session_id UNINDEXED,
+                        content,
+                        searchable_text,
+                        language UNINDEXED,
+                        project UNINDEXED,
+                        files UNINDEXED,
+                        concepts UNINDEXED,
+                        created_at UNINDEXED
+                    )
+                    """,
+                ),
+            )
 
     def set(self, scope: str, key: str, value: Any) -> None:
         payload = json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -100,3 +123,106 @@ class StateKV:
                 "updated_at": row.updated_at.isoformat(),
             }
 
+    def fts_upsert(self, document: dict[str, Any]) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM search_fts WHERE document_id = :document_id"),
+                {"document_id": document["id"]},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO search_fts(
+                        document_id,
+                        source_type,
+                        source_id,
+                        session_id,
+                        content,
+                        searchable_text,
+                        language,
+                        project,
+                        files,
+                        concepts,
+                        created_at
+                    )
+                    VALUES (
+                        :document_id,
+                        :source_type,
+                        :source_id,
+                        :session_id,
+                        :content,
+                        :searchable_text,
+                        :language,
+                        :project,
+                        :files,
+                        :concepts,
+                        :created_at
+                    )
+                    """,
+                ),
+                {
+                    "document_id": document["id"],
+                    "source_type": document["sourceType"],
+                    "source_id": document["sourceId"],
+                    "session_id": document.get("sessionId"),
+                    "content": document["content"],
+                    "searchable_text": document["searchableText"],
+                    "language": document["language"],
+                    "project": document.get("project"),
+                    "files": json.dumps(document.get("files", []), ensure_ascii=False),
+                    "concepts": json.dumps(document.get("concepts", []), ensure_ascii=False),
+                    "created_at": document["createdAt"],
+                },
+            )
+
+    def fts_delete_all(self) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(text("DELETE FROM search_fts"))
+
+    def fts_count(self) -> int:
+        with self.engine.begin() as connection:
+            return int(connection.execute(text("SELECT COUNT(*) FROM search_fts")).scalar_one())
+
+    def fts_search(self, query: str, limit: int) -> list[dict[str, Any]]:
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT
+                        document_id,
+                        source_type,
+                        source_id,
+                        session_id,
+                        content,
+                        searchable_text,
+                        language,
+                        project,
+                        files,
+                        concepts,
+                        created_at,
+                        bm25(search_fts) AS rank
+                    FROM search_fts
+                    WHERE search_fts MATCH :query
+                    ORDER BY rank
+                    LIMIT :limit
+                    """,
+                ),
+                {"query": query, "limit": limit},
+            ).mappings()
+            return [
+                {
+                    "documentId": row["document_id"],
+                    "sourceType": row["source_type"],
+                    "sourceId": row["source_id"],
+                    "sessionId": row["session_id"],
+                    "content": row["content"],
+                    "searchableText": row["searchable_text"],
+                    "language": row["language"],
+                    "project": row["project"],
+                    "files": json.loads(row["files"] or "[]"),
+                    "concepts": json.loads(row["concepts"] or "[]"),
+                    "createdAt": row["created_at"],
+                    "score": 1.0 / (1.0 + abs(float(row["rank"] or 0.0))),
+                }
+                for row in rows
+            ]

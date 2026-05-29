@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 
 Language = Literal["zh", "en", "mixed", "unknown"]
+SourceType = Literal["observation", "memory", "summary"]
+SearchMode = Literal["keyword", "vector", "hybrid"]
 
 
 class SessionRecord(BaseModel):
@@ -86,8 +88,15 @@ class LLMProcessingJobRecord(BaseModel):
 
 class AuditRecord(BaseModel):
     id: str
-    action: Literal["observe", "remember", "llm_processing_done", "llm_processing_failed"]
-    targetType: Literal["observation", "memory", "llm_processing_job"]
+    action: Literal[
+        "observe",
+        "remember",
+        "llm_processing_done",
+        "llm_processing_failed",
+        "index_done",
+        "index_failed",
+    ]
+    targetType: Literal["observation", "memory", "llm_processing_job", "index_job"]
     targetId: str
     source: str
     timestamp: str
@@ -130,3 +139,81 @@ class RememberRequest(BaseModel):
 class RememberResponse(BaseModel):
     memoryId: str
     memory: MemoryRecord
+
+
+class SearchDocument(BaseModel):
+    id: str
+    sourceType: SourceType
+    sourceId: str
+    sessionId: str | None = None
+    content: str
+    searchableText: str
+    language: Language = "unknown"
+    project: str | None = None
+    files: list[str] = Field(default_factory=list)
+    concepts: list[str] = Field(default_factory=list)
+    createdAt: str
+
+
+class SearchResult(BaseModel):
+    documentId: str
+    sourceType: SourceType
+    sourceId: str
+    sessionId: str | None = None
+    content: str
+    score: float
+    language: Language = "unknown"
+    project: str | None = None
+    files: list[str] = Field(default_factory=list)
+    concepts: list[str] = Field(default_factory=list)
+    createdAt: str
+    matchSources: list[Literal["keyword", "vector"]] = Field(default_factory=list)
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+    mode: SearchMode = "keyword"
+    limit: int = Field(default=10, ge=1, le=50)
+    project: str | None = None
+    language: Language | None = None
+    sourceTypes: list[SourceType] = Field(default_factory=list)
+
+
+class SearchResponse(BaseModel):
+    query: str
+    mode: SearchMode
+    results: list[SearchResult] = Field(default_factory=list)
+
+
+class SmartSearchRequest(SearchRequest):
+    mode: SearchMode = "hybrid"
+
+
+class SmartSearchResponse(BaseModel):
+    query: str
+    mode: SearchMode
+    answer: str
+    results: list[SearchResult] = Field(default_factory=list)
+    evidence: list[dict[str, str]] = Field(default_factory=list)
+    context: str = ""
+
+
+class IndexJobRecord(BaseModel):
+    id: str
+    type: Literal["embedding_update", "fts_rebuild", "index_repair"]
+    targetType: SourceType
+    targetId: str
+    status: Literal["pending", "running", "done", "failed"]
+    attempts: int = 0
+    lastError: str | None = None
+    startedAt: str
+    finishedAt: str | None = None
+
+
+class IndexStatus(BaseModel):
+    documents: int
+    indexJobs: int
+    failedJobs: int
+    fts5: dict[str, Any]
+    lancedb: dict[str, Any]
+    embedding: dict[str, Any]
