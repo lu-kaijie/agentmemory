@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from agentmemory.config import Settings, get_settings
@@ -13,7 +16,18 @@ from agentmemory.version import __version__
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or get_settings()
-    app = FastAPI(title="AgentMemory", version=__version__)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        stop_index_worker = asyncio.Event()
+        worker = asyncio.create_task(app.state.search_service.run_pending_worker(stop_index_worker))
+        try:
+            yield
+        finally:
+            stop_index_worker.set()
+            await worker
+
+    app = FastAPI(title="AgentMemory", version=__version__, lifespan=lifespan)
     app.state.settings = resolved
     app.state.kv = StateKV(resolved.db_path)
     app.state.providers = create_provider_bundle(resolved)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -103,7 +104,41 @@ class MemorySearchService:
     def index_document(self, document: SearchDocument) -> IndexJobRecord:
         self.kv.set(KV.search_documents, document.id, document.model_dump())
         self.kv.fts_upsert(document.model_dump())
-        job = self._running_job(document)
+        job = self._pending_job(document)
+        self.kv.set(KV.index_jobs, job.id, job.model_dump())
+        return job
+
+    async def run_pending_worker(self, stop_event: asyncio.Event, interval_seconds: float = 1.0) -> None:
+        while not stop_event.is_set():
+            await asyncio.to_thread(self.process_pending, 25)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+            except TimeoutError:
+                pass
+
+    def process_pending(self, limit: int = 25) -> list[IndexJobRecord]:
+        jobs = [
+            IndexJobRecord.model_validate(item)
+            for item in self.kv.list(KV.index_jobs)
+            if item.get("status") == "pending"
+        ]
+        jobs = sorted(jobs, key=lambda item: item.startedAt)[:limit]
+        return [self._process_job(job) for job in jobs]
+
+    def _process_job(self, job: IndexJobRecord) -> IndexJobRecord:
+        raw = self.kv.get(KV.search_documents, f"doc_{job.targetType}_{job.targetId}")
+        if not raw:
+            job.status = "failed"
+            job.lastError = "search document not found"
+            job.finishedAt = utc_now_iso()
+            self.kv.set(KV.index_jobs, job.id, job.model_dump())
+            return job
+        document = SearchDocument.model_validate(raw)
+        job.status = "running"
+        job.attempts += 1
+        job.startedAt = utc_now_iso()
+        job.finishedAt = None
+        job.lastError = None
         self.kv.set(KV.index_jobs, job.id, job.model_dump())
         try:
             vector = self.embedding.embed_texts([document.searchableText])[0]
@@ -194,7 +229,7 @@ class MemorySearchService:
         self.kv.fts_delete_all()
         self._drop_vector_table()
         documents = self._source_documents()
-        jobs = [self.index_document(document) for document in documents]
+        jobs = [self._process_job(self.index_document(document)) for document in documents]
         return {"documents": len(documents), "jobs": [job.model_dump() for job in jobs]}
 
     def repair(self) -> dict[str, Any]:
@@ -205,10 +240,14 @@ class MemorySearchService:
         latest_jobs = self._latest_jobs(
             [IndexJobRecord.model_validate(item) for item in self.kv.list(KV.index_jobs)],
         )
+        failed_or_pending_jobs = [
+            job
+            for job in latest_jobs.values()
+            if job.status in ("failed", "pending")
+        ]
         failed_targets = {
             (job.targetType, job.targetId)
-            for job in latest_jobs.values()
-            if job.status == "failed"
+            for job in failed_or_pending_jobs
         }
         retry = [
             document
@@ -216,7 +255,13 @@ class MemorySearchService:
             if (document.sourceType, document.sourceId) in failed_targets
         ]
         to_index = _dedupe_documents([*missing, *retry])
-        jobs = [self.index_document(document) for document in to_index]
+        jobs_by_target = {(job.targetType, job.targetId): job for job in failed_or_pending_jobs}
+        jobs = []
+        for document in to_index:
+            job = jobs_by_target.get((document.sourceType, document.sourceId))
+            if job is None:
+                job = self.index_document(document)
+            jobs.append(self._process_job(job))
         return {"documents": len(to_index), "jobs": [job.model_dump() for job in jobs]}
 
     def _search_results(
@@ -318,15 +363,15 @@ class MemorySearchService:
             reverse=True,
         )
 
-    def _running_job(self, document: SearchDocument) -> IndexJobRecord:
+    def _pending_job(self, document: SearchDocument) -> IndexJobRecord:
         now = utc_now_iso()
         return IndexJobRecord(
             id=generate_id("idx"),
             type="embedding_update",
             targetType=document.sourceType,
             targetId=document.sourceId,
-            status="running",
-            attempts=1,
+            status="pending",
+            attempts=0,
             startedAt=now,
         )
 

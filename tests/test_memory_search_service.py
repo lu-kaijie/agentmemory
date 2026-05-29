@@ -63,6 +63,30 @@ def test_indexing_on_observe_summary_and_remember(tmp_path):
     assert status.documents == 3
     assert status.fts5["documents"] == 3
     assert status.failedJobs == 0
+    jobs = service.search_service.process_pending()
+    assert len(jobs) == 3
+    assert all(job.status == "done" for job in jobs)
+
+
+def test_write_enqueues_embedding_without_blocking_keyword_search(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(fail=True))
+
+    result = service.remember(
+        RememberRequest(
+            content="Keyword search is available before vector indexing finishes.",
+            language="en",
+        ),
+    )
+
+    status = service.index_status()
+    keyword = service.search(SearchRequest(query="Keyword", mode="keyword"))
+    vector = service.search(SearchRequest(query="semantic", mode="vector"))
+
+    assert result.memoryId.startswith("mem_")
+    assert status.documents == 1
+    assert status.failedJobs == 0
+    assert keyword.results
+    assert vector.results == []
 
 
 def test_keyword_search_finds_indexed_memory(tmp_path):
@@ -93,6 +117,7 @@ def test_vector_and_hybrid_search_preserve_evidence(tmp_path):
             concepts=["rag", "search"],
         ),
     )
+    service.search_service.process_pending()
 
     vector = service.search(SearchRequest(query="semantic memory retrieval", mode="vector"))
     hybrid = service.search(SearchRequest(query="RAG search", mode="hybrid"))
@@ -141,6 +166,7 @@ def test_index_failure_preserves_source_data(tmp_path):
             language="en",
         ),
     )
+    service.search_service.process_pending()
 
     memories = service.list_memories()
     status = service.index_status()
@@ -154,6 +180,7 @@ def test_index_failure_preserves_source_data(tmp_path):
 def test_rebuild_and_repair(tmp_path):
     service = _service(tmp_path, embedding=StubEmbeddingProvider(fail=True))
     service.remember(RememberRequest(content="Repair retries failed search indexes.", language="en"))
+    service.search_service.process_pending()
     assert service.index_status().failedJobs == 1
 
     service.search_service.embedding = StubEmbeddingProvider()
@@ -168,6 +195,7 @@ def test_rebuild_and_repair(tmp_path):
 def test_vector_search_recovers_from_stale_dimension_table(tmp_path):
     service = _service(tmp_path, embedding=StubEmbeddingProvider())
     service.remember(RememberRequest(content="Search should recover stale vector dimensions.", language="en"))
+    service.search_service.process_pending()
     assert service.search(SearchRequest(query="semantic search", mode="vector")).results
 
     service.search_service._drop_vector_table()

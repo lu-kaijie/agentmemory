@@ -21,6 +21,7 @@
 - [x] 3.6 Implement index status aggregation
 - [x] 3.7 Implement index rebuild from existing observations, memories, and summaries
 - [x] 3.8 Implement index repair for missing or failed jobs
+- [x] 3.9 Implement lightweight background worker for pending embedding jobs
 
 ## 4. Memory Core Integration
 
@@ -67,3 +68,4 @@
 - [x] 8.6 Add documentation checks ensuring Wiki/Viewer/Hook/MCP are not part of this change
 - [x] 8.7 Run full pytest suite
 - [x] 8.8 Verify OpenSpec status is complete for `add-memory-search`
+- [x] 8.9 Verify writes enqueue embedding work without blocking keyword search
