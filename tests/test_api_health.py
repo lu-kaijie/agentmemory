@@ -16,6 +16,58 @@ def test_livez_endpoint(tmp_path):
     assert response.json() == {"status": "alive"}
 
 
+def test_viewer_endpoint_returns_html_and_health_stays_json(tmp_path):
+    app = create_app(ai_settings(tmp_path / "viewer.sqlite3"))
+    client = TestClient(app)
+
+    viewer = client.get("/agentmemory/")
+    health = client.get("/agentmemory/health")
+
+    assert viewer.status_code == 200
+    assert "text/html" in viewer.headers["content-type"]
+    assert "<title>AgentMemory Viewer</title>" in viewer.text
+    assert "data-tab=\"memories\"" in viewer.text
+    assert "data-tab=\"graph\"" in viewer.text
+    assert health.status_code == 200
+    assert health.headers["content-type"].startswith("application/json")
+    assert health.json()["service"] == "agentmemory"
+
+
+def test_viewer_static_content_has_required_sections_and_no_unsupported_actions():
+    from importlib import resources
+
+    html = resources.files("agentmemory.viewer").joinpath("index.html").read_text(encoding="utf-8")
+
+    required = [
+        "AgentMemory Viewer",
+        "/agentmemory/health",
+        "/agentmemory/index/status",
+        "/agentmemory/sessions",
+        "/agentmemory/memories",
+        "/agentmemory/summaries",
+        "/agentmemory/memory-candidates",
+        "/agentmemory/llm-processing-jobs",
+        "/agentmemory/audit",
+        "/agentmemory/search",
+        "/agentmemory/smart-search",
+        "buildGraph",
+    ]
+    for phrase in required:
+        assert phrase in html
+
+    forbidden = [
+        "agentmemory delete",
+        "agentmemory export",
+        "agentmemory wiki",
+        "agentmemory context",
+        "/agentmemory/wiki",
+        "/agentmemory/export",
+        "/agentmemory/delete",
+    ]
+    for phrase in forbidden:
+        assert phrase not in html
+
+
 def test_health_endpoint_reports_database_and_redacts_secret(tmp_path):
     settings = ai_settings(tmp_path / "health.sqlite3")
     settings.secret = "secret-value"

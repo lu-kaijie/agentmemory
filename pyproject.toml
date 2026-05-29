@@ -31,3 +31,9 @@ agentmemory = "agentmemory.cli:app"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentmemory"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/agentmemory/viewer/index.html" = "agentmemory/viewer/index.html"

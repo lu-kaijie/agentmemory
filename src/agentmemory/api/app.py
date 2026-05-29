@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from importlib import resources
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
 from agentmemory.config import Settings, get_settings
 from agentmemory.core import MemoryCoreService
@@ -42,6 +44,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         llm=app.state.providers.llm,
         search=app.state.search_service,
     )
+
+    @app.get("/agentmemory/", response_class=HTMLResponse)
+    def viewer() -> HTMLResponse:
+        html = resources.files("agentmemory.viewer").joinpath("index.html").read_text(encoding="utf-8")
+        return HTMLResponse(html)
 
     @app.get("/agentmemory/livez")
     def livez() -> dict[str, str]:

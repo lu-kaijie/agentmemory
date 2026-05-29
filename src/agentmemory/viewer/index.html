@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentMemory Viewer</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --panel-soft: #f1f4f7;
+      --text: #18202a;
+      --muted: #667085;
+      --line: #d7dde5;
+      --accent: #1f6feb;
+      --good: #16803c;
+      --warn: #b7791f;
+      --bad: #c2410c;
+      --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 24px;
+      background: rgba(255, 255, 255, .92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+    }
+    h1 { margin: 0; font-size: 18px; font-weight: 700; }
+    h2 { margin: 0 0 12px; font-size: 15px; }
+    button, select, input {
+      font: inherit;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+    }
+    button {
+      cursor: pointer;
+      padding: 8px 11px;
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    input, select {
+      min-height: 36px;
+      border-radius: 6px;
+      padding: 7px 9px;
+    }
+    main { padding: 18px 24px 28px; }
+    .topbar { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+    .layout { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+    .stack { display: grid; gap: 12px; }
+    .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .stat { padding: 10px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 6px; }
+    .stat .label { color: var(--muted); font-size: 12px; }
+    .stat .value { margin-top: 4px; font-size: 20px; font-weight: 700; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; color: var(--muted); font-size: 12px; background: #fff; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.ok { background: var(--good); }
+    .dot.warn { background: var(--warn); }
+    .dot.bad { background: var(--bad); }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .tabs button { box-shadow: none; background: var(--panel-soft); }
+    .tabs button.active { background: var(--text); border-color: var(--text); color: #fff; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .toolbar input { flex: 1; min-width: 220px; }
+    .records { display: grid; gap: 8px; max-height: 540px; overflow: auto; padding-right: 2px; }
+    .record { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: #fff; }
+    .record-title { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; font-weight: 650; }
+    .record-title code { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .record-body { color: var(--muted); white-space: pre-wrap; line-height: 1.45; }
+    .tags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+    .tag { font-size: 11px; color: var(--muted); background: var(--panel-soft); border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; }
+    .search-grid { display: grid; gap: 10px; }
+    .search-row { display: grid; grid-template-columns: 1fr 130px auto auto; gap: 8px; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow: auto;
+      background: #101828;
+      color: #f5f7fb;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .graph-wrap { display: grid; grid-template-columns: 1fr 220px; gap: 12px; }
+    svg { width: 100%; min-height: 460px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+    .edge { stroke: #a9b4c2; stroke-width: 1.2; }
+    .node text { font-size: 11px; fill: var(--text); pointer-events: none; }
+    .node circle { stroke: #fff; stroke-width: 2; }
+    .legend { display: grid; gap: 7px; color: var(--muted); }
+    .empty, .error { color: var(--muted); padding: 18px; border: 1px dashed var(--line); border-radius: 6px; background: var(--panel-soft); }
+    .error { color: var(--bad); }
+    @media (max-width: 980px) {
+      .layout, .graph-wrap { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
+      .search-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>AgentMemory Viewer</h1>
+      <div class="topbar">长期记忆 · 搜索 · 索引状态 · 轻量关系图</div>
+    </div>
+    <div class="topbar">
+      <span class="pill"><span id="status-dot" class="dot"></span><span id="status-text">loading</span></span>
+      <button id="refresh-btn">刷新</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="stack">
+      <section class="panel">
+        <h2>状态</h2>
+        <div id="status-cards" class="stats"></div>
+      </section>
+      <section class="panel">
+        <h2>索引</h2>
+        <div id="index-cards" class="stats"></div>
+        <div class="toolbar" style="margin:12px 0 0">
+          <button id="repair-index">Repair</button>
+          <button id="rebuild-index">Rebuild</button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="panel">
+      <div class="tabs" id="tabs">
+        <button class="active" data-tab="search">Search</button>
+        <button data-tab="memories">Memories</button>
+        <button data-tab="sessions">Sessions</button>
+        <button data-tab="summaries">Summaries</button>
+        <button data-tab="candidates">Candidates</button>
+        <button data-tab="jobs">LLM Jobs</button>
+        <button data-tab="audit">Audit</button>
+        <button data-tab="graph">Graph</button>
+      </div>
+      <div id="content"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      tab: 'search',
+      health: null,
+      index: null,
+      sessions: [],
+      memories: [],
+      summaries: [],
+      candidates: [],
+      jobs: [],
+      audit: [],
+      search: null,
+      smart: null,
+      error: null,
+    };
+
+    const api = async (path, options = {}) => {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options,
+      });
+      if (!res.ok) throw new Error(`${path} returned ${res.status}`);
+      return res.json();
+    };
+
+    const esc = (value) => String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+
+    const textOf = (item) => item.content || item.summary || item.answer || item.type || JSON.stringify(item);
+    const short = (value, max = 220) => {
+      const text = String(value ?? '');
+      return text.length > max ? `${text.slice(0, max)}...` : text;
+    };
+
+    async function loadAll() {
+      state.error = null;
+      try {
+        const [health, index, sessions, memories, summaries, candidates, jobs, audit] = await Promise.all([
+          api('/agentmemory/health'),
+          api('/agentmemory/index/status'),
+          api('/agentmemory/sessions'),
+          api('/agentmemory/memories'),
+          api('/agentmemory/summaries'),
+          api('/agentmemory/memory-candidates'),
+          api('/agentmemory/llm-processing-jobs'),
+          api('/agentmemory/audit'),
+        ]);
+        state.health = health;
+        state.index = index;
+        state.sessions = sessions.sessions || [];
+        state.memories = memories.memories || [];
+        state.summaries = summaries.summaries || [];
+        state.candidates = candidates.memoryCandidates || [];
+        state.jobs = jobs.llmProcessingJobs || [];
+        state.audit = audit.audit || [];
+      } catch (err) {
+        state.error = err.message || String(err);
+      }
+      render();
+    }
+
+    function render() {
+      renderStatus();
+      renderActiveTab();
+    }
+
+    function renderStatus() {
+      const ok = state.health && state.health.status === 'ok';
+      document.getElementById('status-dot').className = `dot ${ok ? 'ok' : state.error ? 'bad' : 'warn'}`;
+      document.getElementById('status-text').textContent = state.error || (state.health ? state.health.status : 'loading');
+
+      const providers = state.health?.providers || {};
+      document.getElementById('status-cards').innerHTML = [
+        stat('Service', state.health?.status || 'unknown', state.health?.version || ''),
+        stat('Database', state.health?.database?.ok ? 'ok' : 'unknown', state.health?.config?.db_path || ''),
+        stat('LLM', providers.llm?.ready ? 'ready' : 'not ready', providers.llm?.model || ''),
+        stat('Embedding', providers.embedding?.ready ? 'ready' : 'not ready', providers.embedding?.model || ''),
+      ].join('');
+
+      document.getElementById('index-cards').innerHTML = [
+        stat('Documents', state.index?.documents ?? 0, 'search docs'),
+        stat('Jobs', state.index?.indexJobs ?? 0, `${state.index?.failedJobs ?? 0} failed`),
+        stat('FTS5', state.index?.fts5?.ok ? 'ok' : 'unknown', `${state.index?.fts5?.documents ?? 0} docs`),
+        stat('LanceDB', state.index?.lancedb?.ok ? 'ok' : 'unknown', state.index?.lancedb?.table || ''),
+      ].join('');
+    }
+
+    function stat(label, value, sub) {
+      return `<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="label">${esc(sub)}</div></div>`;
+    }
+
+    function renderActiveTab() {
+      if (state.error) {
+        document.getElementById('content').innerHTML = `<div class="error">${esc(state.error)}</div>`;
+        return;
+      }
+      const renderers = {
+        search: renderSearch,
+        memories: () => renderList('Memories', state.memories, 'memory'),
+        sessions: () => renderList('Sessions', state.sessions, 'session'),
+        summaries: () => renderList('Summaries', state.summaries, 'summary'),
+        candidates: () => renderList('Memory Candidates', state.candidates, 'candidate'),
+        jobs: () => renderList('LLM Processing Jobs', state.jobs, 'job'),
+        audit: () => renderList('Audit', state.audit, 'audit'),
+        graph: renderGraph,
+      };
+      document.getElementById('content').innerHTML = renderers[state.tab]();
+      bindTabActions();
+    }
+
+    function renderSearch() {
+      return `
+        <div class="search-grid">
+          <div class="search-row">
+            <input id="search-query" placeholder="搜索记忆、决策、文件或问题" value="${esc(document.getElementById('search-query')?.value || '')}">
+            <select id="search-mode">
+              ${['keyword', 'vector', 'hybrid'].map(mode => `<option value="${mode}">${mode}</option>`).join('')}
+            </select>
+            <button class="primary" id="run-search">Search</button>
+            <button id="run-smart-search">Smart</button>
+          </div>
+          ${state.search ? section('Search Results', renderResults(state.search.results || [])) : ''}
+          ${state.smart ? section('Smart Search', `
+            <div class="record"><div class="record-title">Answer</div><div class="record-body">${esc(state.smart.answer)}</div></div>
+            ${renderResults(state.smart.results || [])}
+            <h2>Evidence</h2><pre>${esc(JSON.stringify(state.smart.evidence || [], null, 2))}</pre>
+            <h2>Context</h2><pre>${esc(state.smart.context || '')}</pre>
+          `) : ''}
+        </div>
+      `;
+    }
+
+    function section(title, body) {
+      return `<section><h2>${esc(title)}</h2>${body}</section>`;
+    }
+
+    function renderResults(results) {
+      if (!results.length) return '<div class="empty">没有结果</div>';
+      return `<div class="records">${results.map(item => record(item, item.sourceType || 'result')).join('')}</div>`;
+    }
+
+    function renderList(title, items, kind) {
+      return `
+        <h2>${esc(title)}</h2>
+        ${items.length ? `<div class="records">${items.map(item => record(item, kind)).join('')}</div>` : '<div class="empty">暂无数据</div>'}
+      `;
+    }
+
+    function record(item, kind) {
+      const id = item.id || item.sourceId || item.observationId || item.memoryId || item.targetId || '';
+      const title = item.type || item.action || item.status || item.sourceType || kind;
+      const body = item.content || item.answer || item.lastError || item.details && JSON.stringify(item.details) || JSON.stringify(item);
+      const tags = [
+        ...(item.concepts || []),
+        ...(item.files || []),
+        item.project,
+        item.language,
+        item.sessionId,
+        ...(item.matchSources || []),
+      ].filter(Boolean).slice(0, 8);
+      return `
+        <article class="record">
+          <div class="record-title"><span>${esc(title)}</span><code>${esc(id)}</code></div>
+          <div class="record-body">${esc(short(body))}</div>
+          ${tags.length ? `<div class="tags">${tags.map(tag => `<span class="tag">${esc(tag)}</span>`).join('')}</div>` : ''}
+        </article>
+      `;
+    }
+
+    function renderGraph() {
+      const graph = buildGraph();
+      if (!graph.nodes.length) return '<div class="empty">暂无可绘制关系。添加 memories、sessions、concepts 或 files 后再查看。</div>';
+      const width = 900;
+      const height = 520;
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const radius = Math.min(width, height) * 0.36;
+      graph.nodes.forEach((node, index) => {
+        const angle = (Math.PI * 2 * index) / graph.nodes.length;
+        node.x = centerX + Math.cos(angle) * radius;
+        node.y = centerY + Math.sin(angle) * radius;
+      });
+      const byId = Object.fromEntries(graph.nodes.map(node => [node.id, node]));
+      const edges = graph.edges.map(edge => {
+        const from = byId[edge.from];
+        const to = byId[edge.to];
+        if (!from || !to) return '';
+        return `<line class="edge" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"><title>${esc(edge.label)}</title></line>`;
+      }).join('');
+      const nodes = graph.nodes.map(node => `
+        <g class="node">
+          <circle cx="${node.x}" cy="${node.y}" r="15" fill="${colorFor(node.type)}"><title>${esc(node.label)} (${node.type})</title></circle>
+          <text x="${node.x + 19}" y="${node.y + 4}">${esc(short(node.label, 24))}</text>
+        </g>
+      `).join('');
+      return `
+        <div class="graph-wrap">
+          <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="AgentMemory relationship graph">${edges}${nodes}</svg>
+          <div class="panel legend">
+            <h2>Graph</h2>
+            <span>Nodes: ${graph.nodes.length}</span>
+            <span>Edges: ${graph.edges.length}</span>
+            ${['project', 'session', 'memory', 'summary', 'concept', 'file'].map(type => `<span><span class="dot" style="background:${colorFor(type)}"></span> ${type}</span>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function buildGraph() {
+      const nodes = new Map();
+      const edges = [];
+      const addNode = (id, type, label) => {
+        if (!nodes.has(id)) nodes.set(id, { id, type, label });
+      };
+      const addEdge = (from, to, label) => {
+        if (from && to) edges.push({ from, to, label });
+      };
+      for (const session of state.sessions) {
+        addNode(`session:${session.id}`, 'session', session.id);
+        if (session.project) {
+          addNode(`project:${session.project}`, 'project', session.project);
+          addEdge(`session:${session.id}`, `project:${session.project}`, 'belongs_to');
+        }
+      }
+      for (const memory of state.memories) {
+        addNode(`memory:${memory.id}`, 'memory', short(memory.content, 32));
+        for (const concept of memory.concepts || []) {
+          addNode(`concept:${concept}`, 'concept', concept);
+          addEdge(`memory:${memory.id}`, `concept:${concept}`, 'mentions');
+        }
+        for (const file of memory.files || []) {
+          addNode(`file:${file}`, 'file', file.split('/').pop() || file);
+          addEdge(`memory:${memory.id}`, `file:${file}`, 'mentions');
+        }
+      }
+      for (const summary of state.summaries) {
+        addNode(`summary:${summary.id}`, 'summary', short(summary.content, 32));
+        const job = state.jobs.find(item => item.summaryId === summary.id);
+        const sessionId = state.sessions.find(session => session.id === job?.sessionId)?.id;
+        if (sessionId) addEdge(`summary:${summary.id}`, `session:${sessionId}`, 'derived_from');
+      }
+      return { nodes: [...nodes.values()].slice(0, 80), edges: edges.slice(0, 140) };
+    }
+
+    function colorFor(type) {
+      return {
+        project: '#1f6feb',
+        session: '#16803c',
+        memory: '#9b5de5',
+        summary: '#f59e0b',
+        concept: '#0f766e',
+        file: '#64748b',
+      }[type] || '#667085';
+    }
+
+    function bindTabActions() {
+      const searchBtn = document.getElementById('run-search');
+      const smartBtn = document.getElementById('run-smart-search');
+      if (searchBtn) searchBtn.addEventListener('click', async () => {
+        const query = document.getElementById('search-query').value.trim();
+        const mode = document.getElementById('search-mode').value;
+        if (!query) return;
+        searchBtn.disabled = true;
+        try {
+          state.search = await api('/agentmemory/search', { method: 'POST', body: JSON.stringify({ query, mode, limit: 10 }) });
+        } catch (err) {
+          state.search = { results: [], error: err.message };
+        }
+        searchBtn.disabled = false;
+        renderActiveTab();
+      });
+      if (smartBtn) smartBtn.addEventListener('click', async () => {
+        const query = document.getElementById('search-query').value.trim();
+        const mode = document.getElementById('search-mode').value;
+        if (!query) return;
+        smartBtn.disabled = true;
+        try {
+          state.smart = await api('/agentmemory/smart-search', { method: 'POST', body: JSON.stringify({ query, mode, limit: 5 }) });
+        } catch (err) {
+          state.smart = { answer: err.message, results: [], evidence: [], context: '' };
+        }
+        smartBtn.disabled = false;
+        renderActiveTab();
+      });
+    }
+
+    document.getElementById('tabs').addEventListener('click', (event) => {
+      if (!event.target.matches('button[data-tab]')) return;
+      state.tab = event.target.dataset.tab;
+      document.querySelectorAll('#tabs button').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === state.tab));
+      renderActiveTab();
+    });
+    document.getElementById('refresh-btn').addEventListener('click', loadAll);
+    document.getElementById('repair-index').addEventListener('click', async () => {
+      await api('/agentmemory/index/repair', { method: 'POST', body: '{}' });
+      await loadAll();
+    });
+    document.getElementById('rebuild-index').addEventListener('click', async () => {
+      if (!confirm('Rebuild search indexes?')) return;
+      await api('/agentmemory/index/rebuild', { method: 'POST', body: '{}' });
+      await loadAll();
+    });
+
+    loadAll();
+  </script>
+</body>
+</html>
