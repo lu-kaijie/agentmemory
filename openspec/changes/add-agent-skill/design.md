@@ -2,7 +2,9 @@
 
 AgentMemory 当前已经提供 CLI、REST API、LLM processing、关键词检索、向量检索和 smart-search。缺口不是新的后端能力，而是 agent 侧的使用协议：agent 需要知道什么时候查询、什么时候保存、如何避免高频调用影响当前工作流。
 
-本变更使用 `skill-creator` 的原则设计 Skill：内容保持精简，触发描述清楚，正文只放必要流程和约束，不把 Skill 写成完整产品说明书。Skill 本体使用中文，命令、路径、字段名保持英文。
+本变更使用 `skill-creator` 的原则设计 Skill：内容保持精简，触发描述清楚，正文只放必要流程和约束，不把 Skill 写成完整产品说明书。Skill 本体使用中文，命令、API 路径和字段名保持英文。
+
+用户在全局 agent 配置中只需要写一句使用 AgentMemory skill 的指令，不需要写 Skill 文件路径。推荐文案：`编码任务中使用 AgentMemory skill 管理长期记忆。`
 
 ## Goals / Non-Goals
 
@@ -11,6 +13,7 @@ AgentMemory 当前已经提供 CLI、REST API、LLM processing、关键词检索
 - 创建 `skills/agentmemory/SKILL.md`。
 - Skill 使用中文编写。
 - Skill frontmatter 包含准确的 `name` 和 `description`。
+- Skill 或项目配置说明提供一行全局启用文案，只提 `AgentMemory skill` 名称，不指定路径。
 - Skill 明确 CLI 优先、REST 兜底。
 - Skill 明确低频调用策略，避免拖慢 agent 当前任务。
 - Skill 明确查询、保存、观察记录和索引维护的触发场景。
@@ -29,7 +32,7 @@ AgentMemory 当前已经提供 CLI、REST API、LLM processing、关键词检索
 
 ### 1. Skill 放在仓库内 `skills/agentmemory/SKILL.md`
 
-仓库内 Skill 便于版本管理、测试和后续打包。当前阶段不自动安装到全局 Codex skills 目录，避免影响用户已有环境。
+仓库内 Skill 便于版本管理、测试和后续打包。当前阶段不自动安装到全局 skills 目录，也不修改用户全局 agent 配置；用户按项目配置文档自行启用。
 
 ### 2. Skill 正文保持中文和短流程
 
@@ -46,6 +49,16 @@ CLI 对多数 coding agent 更通用，也更容易在 shell 工具中调用。R
 ### 5. 不包含 Hook/MCP 说明
 
 第一版范围明确不做 Hook/MCP。Skill 不能暗示当前版本支持这些接入方式，否则会让 agent 误用不存在的能力。
+
+### 6. 全局配置只写一句话
+
+全局 agent 配置的职责只是触发 agent 使用 Skill，不承载具体操作规则。配置文档推荐用户写：
+
+```text
+编码任务中使用 AgentMemory skill 管理长期记忆。
+```
+
+不要在这句话中写本地路径，避免绑定某个安装目录或某个 agent 客户端。
 
 ## Risks / Trade-offs
 
