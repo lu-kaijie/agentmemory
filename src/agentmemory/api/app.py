@@ -15,8 +15,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="AgentMemory", version=__version__)
     app.state.settings = resolved
     app.state.kv = StateKV(resolved.db_path)
-    app.state.memory_core = MemoryCoreService(app.state.kv)
     app.state.providers = create_provider_bundle(resolved)
+    app.state.memory_core = MemoryCoreService(app.state.kv, llm=app.state.providers.llm)
 
     @app.get("/agentmemory/livez")
     def livez() -> dict[str, str]:
@@ -67,5 +67,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def audit() -> dict[str, object]:
         items = app.state.memory_core.list_audit()
         return {"audit": [item.model_dump() for item in items]}
+
+    @app.get("/agentmemory/summaries")
+    def summaries() -> dict[str, object]:
+        items = app.state.memory_core.list_summaries()
+        return {"summaries": [item.model_dump() for item in items]}
+
+    @app.get("/agentmemory/memory-candidates")
+    def memory_candidates() -> dict[str, object]:
+        items = app.state.memory_core.list_memory_candidates()
+        return {"memoryCandidates": [item.model_dump() for item in items]}
+
+    @app.get("/agentmemory/llm-processing-jobs")
+    def llm_processing_jobs() -> dict[str, object]:
+        items = app.state.memory_core.list_llm_processing_jobs()
+        return {"llmProcessingJobs": [item.model_dump() for item in items]}
 
     return app

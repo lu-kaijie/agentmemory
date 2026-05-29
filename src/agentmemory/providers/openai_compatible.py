@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from openai import OpenAI
@@ -40,21 +41,24 @@ class OpenAICompatibleLLMProvider:
             [
                 {
                     "role": "system",
-                    "content": "Extract stable long-term memory candidates as JSON array.",
+                    "content": (
+                        "Extract stable long-term memory candidates. "
+                        "Prefer this XML-like format:\n"
+                        "<memories>\n"
+                        '<memory type="fact" confidence="0.8">\n'
+                        "<content>Durable fact to remember.</content>\n"
+                        "<concepts>comma,separated,concepts</concepts>\n"
+                        "<files>comma,separated,files</files>\n"
+                        "</memory>\n"
+                        "</memories>\n"
+                        "If there are no durable memories, output <memories/>."
+                    ),
                 },
                 {"role": "user", "content": text},
             ],
             "extract_memories",
         )
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            return [{"type": "note", "content": content}]
-        if isinstance(parsed, list):
-            return [item for item in parsed if isinstance(item, dict)]
-        if isinstance(parsed, dict):
-            return [parsed]
-        return [{"type": "note", "content": content}]
+        return _parse_memory_xml(content)
 
     def explain_search(self, query: str, results: list[dict[str, Any]]) -> str:
         return self._complete(
@@ -132,3 +136,43 @@ class OpenAICompatibleEmbeddingProvider:
         except Exception as exc:  # pragma: no cover - exercised by real provider failures
             self.last_error = str(exc)
             raise ProviderError("embedding", "embed_texts", str(exc)) from exc
+
+
+def _parse_memory_xml(content: str) -> list[dict[str, Any]]:
+    if "<memories/>" in content or "<no-memory/>" in content:
+        return []
+
+    items: list[dict[str, Any]] = []
+    memory_regex = re.compile(r"<memory\b([^>]*)>([\s\S]*?)</memory>", re.IGNORECASE)
+    for match in memory_regex.finditer(content):
+        attrs = match.group(1)
+        body = match.group(2)
+        memory_content = _tag_text(body, "content") or body.strip()
+        if not memory_content:
+            continue
+        items.append(
+            {
+                "type": _attr_value(attrs, "type") or "fact",
+                "confidence": _attr_value(attrs, "confidence"),
+                "content": memory_content,
+                "concepts": _csv_values(_tag_text(body, "concepts")),
+                "files": _csv_values(_tag_text(body, "files")),
+            },
+        )
+    return items
+
+
+def _attr_value(attrs: str, name: str) -> str | None:
+    match = re.search(rf'\b{re.escape(name)}="([^"]*)"', attrs, re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def _tag_text(content: str, tag: str) -> str | None:
+    match = re.search(rf"<{re.escape(tag)}>([\s\S]*?)</{re.escape(tag)}>", content, re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def _csv_values(content: str | None) -> list[str]:
+    if not content:
+        return []
+    return [item.strip() for item in content.split(",") if item.strip()]

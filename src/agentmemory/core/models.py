@@ -51,10 +51,43 @@ class MemoryRecord(BaseModel):
     createdAt: str
 
 
+class SummaryRecord(BaseModel):
+    id: str
+    observationId: str
+    content: str
+    source: str = "llm"
+    language: Language = "unknown"
+    createdAt: str
+
+
+class MemoryCandidateRecord(BaseModel):
+    id: str
+    observationId: str
+    content: str
+    type: str = "fact"
+    confidence: float | None = None
+    concepts: list[str] = Field(default_factory=list)
+    files: list[str] = Field(default_factory=list)
+    language: Language = "unknown"
+    status: Literal["candidate"] = "candidate"
+    createdAt: str
+
+
+class LLMProcessingJobRecord(BaseModel):
+    id: str
+    observationId: str
+    status: Literal["running", "done", "failed"]
+    summaryId: str | None = None
+    candidateIds: list[str] = Field(default_factory=list)
+    lastError: str | None = None
+    startedAt: str
+    finishedAt: str | None = None
+
+
 class AuditRecord(BaseModel):
     id: str
-    action: Literal["observe", "remember"]
-    targetType: Literal["observation", "memory"]
+    action: Literal["observe", "remember", "llm_processing_done", "llm_processing_failed"]
+    targetType: Literal["observation", "memory", "llm_processing_job"]
     targetId: str
     source: str
     timestamp: str
@@ -77,6 +110,9 @@ class ObserveResponse(BaseModel):
     observationId: str
     sessionId: str
     observation: ObservationRecord
+    processingJob: LLMProcessingJobRecord | None = None
+    summary: SummaryRecord | None = None
+    memoryCandidates: list[MemoryCandidateRecord] = Field(default_factory=list)
 
 
 class RememberRequest(BaseModel):
@@ -94,4 +130,3 @@ class RememberRequest(BaseModel):
 class RememberResponse(BaseModel):
     memoryId: str
     memory: MemoryRecord
-

@@ -9,7 +9,7 @@ from agentmemory.api.app import create_app
 from agentmemory.config import get_settings
 from agentmemory.core.models import ObserveRequest, RememberRequest
 from agentmemory.core.service import MemoryCoreService
-from agentmemory.providers import MissingAIProviderSettings, create_provider_bundle, require_ai_settings
+from agentmemory.providers import MissingAIProviderSettings, create_provider_bundle
 from agentmemory.state import StateKV
 
 app = typer.Typer(help="AgentMemory local service")
@@ -68,8 +68,8 @@ def doctor() -> None:
 
 def _memory_core() -> MemoryCoreService:
     settings = get_settings()
-    require_ai_settings(settings)
-    return MemoryCoreService(StateKV(settings.db_path))
+    providers = create_provider_bundle(settings)
+    return MemoryCoreService(StateKV(settings.db_path), llm=providers.llm)
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -172,3 +172,36 @@ def list_audit(json_output: bool = typer.Option(False, "--json", help="Output JS
     else:
         for item in items:
             typer.echo(f"{item['id']} {item['action']} {item['targetType']}:{item['targetId']}")
+
+
+@app.command("summaries")
+def list_summaries(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List LLM-generated summaries."""
+    items = [item.model_dump() for item in _memory_core().list_summaries()]
+    if json_output:
+        _emit({"summaries": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} observation={item['observationId']} {item['content']}")
+
+
+@app.command("memory-candidates")
+def list_memory_candidates(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List LLM-extracted candidate memories."""
+    items = [item.model_dump() for item in _memory_core().list_memory_candidates()]
+    if json_output:
+        _emit({"memoryCandidates": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} [{item['type']}] {item['content']}")
+
+
+@app.command("llm-processing-jobs")
+def list_llm_processing_jobs(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List LLM processing jobs."""
+    items = [item.model_dump() for item in _memory_core().list_llm_processing_jobs()]
+    if json_output:
+        _emit({"llmProcessingJobs": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} observation={item['observationId']} status={item['status']}")

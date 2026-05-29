@@ -3,6 +3,9 @@ class KV:
     metadata = "system:metadata"
     sessions = "mem:sessions"
     memories = "mem:memories"
+    summaries = "mem:summaries"
+    memory_candidates = "mem:memoryCandidates"
+    llm_processing_jobs = "mem:llmProcessingJobs"
     audit = "mem:audit"
 
     @staticmethod

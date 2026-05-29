@@ -2,6 +2,7 @@ import pytest
 
 from agentmemory.config import Settings
 from agentmemory.providers import OpenAICompatibleEmbeddingProvider, OpenAICompatibleLLMProvider
+from agentmemory.providers.openai_compatible import _parse_memory_xml
 
 
 def _required_setting(settings: Settings, env_name: str, field_name: str) -> str:
@@ -42,3 +43,35 @@ def test_real_embedding_provider_embed_texts_call():
     assert vectors[0]
     assert all(isinstance(value, float) for value in vectors[0])
     assert provider.status().lastError is None
+
+
+def test_parse_memory_xml_candidates():
+    items = _parse_memory_xml(
+        """
+        <memories>
+          <memory type="decision" confidence="0.82">
+            <content>Use XML-like memory extraction output before JSON fallback.</content>
+            <concepts>llm-output, parsing</concepts>
+            <files>src/agentmemory/providers/openai_compatible.py</files>
+          </memory>
+        </memories>
+        """,
+    )
+
+    assert items == [
+        {
+            "type": "decision",
+            "confidence": "0.82",
+            "content": "Use XML-like memory extraction output before JSON fallback.",
+            "concepts": ["llm-output", "parsing"],
+            "files": ["src/agentmemory/providers/openai_compatible.py"],
+        },
+    ]
+
+
+def test_parse_memory_xml_empty_candidates():
+    assert _parse_memory_xml("<memories/>") == []
+
+
+def test_parse_memory_xml_ignores_json_candidates():
+    assert _parse_memory_xml('[{"type":"fact","content":"Do not parse JSON here."}]') == []
