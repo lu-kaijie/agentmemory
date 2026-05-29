@@ -166,6 +166,7 @@ class MemorySearchService:
 
     def status(self) -> IndexStatus:
         jobs = [IndexJobRecord.model_validate(item) for item in self.kv.list(KV.index_jobs)]
+        latest_jobs = self._latest_jobs(jobs)
         vector_ok = True
         vector_error = None
         try:
@@ -177,7 +178,7 @@ class MemorySearchService:
         return IndexStatus(
             documents=len(self.kv.list(KV.search_documents)),
             indexJobs=len(jobs),
-            failedJobs=len([job for job in jobs if job.status == "failed"]),
+            failedJobs=len([job for job in latest_jobs.values() if job.status == "failed"]),
             fts5={"ok": True, "documents": self.kv.fts_count()},
             lancedb={
                 "ok": vector_ok,
@@ -201,9 +202,12 @@ class MemorySearchService:
         indexed_ids = {document.id for document in documents}
         source_documents = self._source_documents()
         missing = [document for document in source_documents if document.id not in indexed_ids]
+        latest_jobs = self._latest_jobs(
+            [IndexJobRecord.model_validate(item) for item in self.kv.list(KV.index_jobs)],
+        )
         failed_targets = {
             (job.targetType, job.targetId)
-            for job in (IndexJobRecord.model_validate(item) for item in self.kv.list(KV.index_jobs))
+            for job in latest_jobs.values()
             if job.status == "failed"
         }
         retry = [
@@ -238,7 +242,7 @@ class MemorySearchService:
 
     def _keyword_search(self, query: str, limit: int) -> list[SearchResult]:
         try:
-            rows = self.kv.fts_search(query, limit)
+            rows = self.kv.fts_search(_fts_query(query), limit)
         except Exception:
             rows = self.kv.fts_search(_escape_fts_query(query), limit)
         return [
@@ -263,6 +267,8 @@ class MemorySearchService:
         if not self._vector_table_exists():
             return []
         vector = self.embedding.embed_texts([query])[0]
+        if self._vector_dimension() not in (None, len(vector)):
+            self.rebuild()
         try:
             rows = self._table().search(vector, vector_column_name="vector").limit(limit).to_list()
         except Exception:
@@ -303,7 +309,14 @@ class MemorySearchService:
                 continue
             existing.score = max(existing.score, result.score) + min(existing.score, result.score) * 0.25
             existing.matchSources = sorted(set([*existing.matchSources, *result.matchSources]))  # type: ignore[assignment]
-        return sorted(merged.values(), key=lambda item: item.score, reverse=True)
+        return sorted(
+            merged.values(),
+            key=lambda item: (
+                "keyword" in item.matchSources and "vector" in item.matchSources,
+                item.score,
+            ),
+            reverse=True,
+        )
 
     def _running_job(self, document: SearchDocument) -> IndexJobRecord:
         now = utc_now_iso()
@@ -375,6 +388,22 @@ class MemorySearchService:
         tables = getattr(response, "tables", response)
         return {str(item) for item in tables}
 
+    def _vector_dimension(self) -> int | None:
+        if not self._vector_table_exists():
+            return None
+        try:
+            table = self._table()
+            field = table.schema.field("vector")
+            return int(getattr(field.type, "list_size", 0) or 0) or None
+        except Exception:
+            return None
+
+    def _latest_jobs(self, jobs: list[IndexJobRecord]) -> dict[tuple[str, str], IndexJobRecord]:
+        latest: dict[tuple[str, str], IndexJobRecord] = {}
+        for job in sorted(jobs, key=lambda item: item.startedAt):
+            latest[(job.targetType, job.targetId)] = job
+        return latest
+
     def _source_documents(self) -> list[SearchDocument]:
         documents: list[SearchDocument] = []
         sessions = self.kv.list(KV.sessions)
@@ -408,3 +437,10 @@ def _dedupe_documents(documents: Iterable[SearchDocument]) -> list[SearchDocumen
 def _escape_fts_query(query: str) -> str:
     escaped = query.replace('"', '""')
     return f'"{escaped}"'
+
+
+def _fts_query(query: str) -> str:
+    tokens = [token for token in query.replace("-", " ").split() if token]
+    if not tokens:
+        return _escape_fts_query(query)
+    return " OR ".join(_escape_fts_query(token) for token in tokens)

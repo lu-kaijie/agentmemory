@@ -162,4 +162,18 @@ def test_rebuild_and_repair(tmp_path):
 
     assert repair["documents"] == 1
     assert rebuild["documents"] == 1
-    assert service.index_status().failedJobs == 1
+    assert service.index_status().failedJobs == 0
+
+
+def test_vector_search_recovers_from_stale_dimension_table(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider())
+    service.remember(RememberRequest(content="Search should recover stale vector dimensions.", language="en"))
+    assert service.search(SearchRequest(query="semantic search", mode="vector")).results
+
+    service.search_service._drop_vector_table()
+    service.search_service._table([0.1, 0.2])
+
+    result = service.search(SearchRequest(query="semantic search", mode="vector"))
+
+    assert result.results
+    assert service.index_status().failedJobs == 0
