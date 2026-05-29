@@ -223,3 +223,26 @@ Skill 中列出的 REST 路径 MUST 对应当前已实现接口。REST 响应 MU
 
 - **WHEN** agent 无法使用 CLI 但可以调用本地 HTTP 服务
 - **THEN** agent 可以按 Skill 调用 REST API 完成等价操作
+
+### Requirement: Viewer Static Entry
+
+系统 SHALL 通过 REST 服务暴露 Web Viewer 静态入口。
+
+`GET /agentmemory/` MUST 返回 Viewer HTML。该入口 MUST 与现有 API 路径共存，不得破坏 `/agentmemory/health`、`/agentmemory/search` 等接口。
+
+#### Scenario: Viewer route coexists with API routes
+
+- **WHEN** 用户访问 `/agentmemory/`
+- **THEN** 系统返回 Viewer HTML
+- **AND** 现有 `/agentmemory/health` API 仍可正常返回 JSON
+
+### Requirement: Viewer Uses Existing API
+
+Viewer SHALL 使用现有 REST API 获取状态、数据列表、搜索结果和索引状态。
+
+如果实现需要新增 Viewer 专用 endpoint，该 endpoint MUST 只读，且 MUST NOT 绕过 core service 或 StateKV 抽象。
+
+#### Scenario: Viewer fetches API data
+
+- **WHEN** Viewer 加载数据
+- **THEN** Viewer 通过 REST API 获取数据，而不是直接读取本地数据库
