@@ -86,6 +86,8 @@ P0 验收标准：
 - 用户显式 memory 能保存、导出、删除，并产生 audit。
 - LLM 或 embedding provider 不可用时，服务不能进入可用运行状态。
 
+候选记忆提炼使用 XML-like `<memory>` 标签格式解析 LLM 输出。普通 JSON prompt 输出和解释性文本不应被兜底保存为候选记忆，避免误存不符合结构的数据。
+
 ### P1：应具备
 
 - session start/end 和会话级 summary。

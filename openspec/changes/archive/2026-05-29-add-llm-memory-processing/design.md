@@ -106,7 +106,7 @@ Summary 保存到 `summaries`，字段包含：
 - 同步 LLM 会增加 observe 延迟 -> 第一版优先保证 AI 结果立即可验收，后续后台任务优化。
 - Skill 写得过于激进会拖慢 agent -> 在 Skill 规则中限制 `observe` 只能低频、阶段性触发。
 - 未来 hook 可能产生高频 observation -> hook 不得默认同步触发 LLM，必须引入节流/队列/显式开关。
-- LLM 输出 JSON 不稳定 -> provider/service 需要容错，把非 JSON 输出包装成单条 candidate。
+- LLM 普通 JSON prompt 输出不稳定 -> candidate memory extraction 使用 XML-like `<memory>` 标签格式并只解析标签内容；JSON 或普通文本输出不得被兜底保存为 candidate。
 - Candidate memory 可能有误 -> 不自动保存为正式 memory，保留人工/后续治理入口。
 - 测试真实 LLM 有网络和成本 -> 只对 provider 层保留真实调用测试；service 行为测试使用受控 stub，避免每个单元测试都调用远程模型。
 
