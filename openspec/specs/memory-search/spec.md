@@ -3,9 +3,7 @@
 ## Purpose
 
 定义 AgentMemory 对 observation、memory 和 summary 的关键词检索、向量检索、混合检索和基于证据的智能解释能力。
-
 ## Requirements
-
 ### Requirement: Keyword Search
 
 系统 SHALL 支持对已索引的 observation、memory 和 summary 执行关键词检索。
@@ -70,3 +68,37 @@ Smart search response MUST 包含 `answer`、`results`、`evidence` 和 `context
 
 - **WHEN** 客户端使用 `hybrid` mode 调用 search
 - **THEN** 系统执行 FTS5 和 LanceDB 检索并合并结果
+
+### Requirement: Search Wiki Pages
+
+系统 SHALL 支持搜索 Wiki pages。
+
+Search sourceTypes MUST 支持 `wikiPage`。Keyword、vector 和 hybrid search MUST 能返回匹配的 Wiki page results，并保留 Wiki page source id。
+
+Search sourceTypes MUST 支持 `knowledge`。Keyword、vector 和 hybrid search MUST 能返回匹配的 distilled knowledge results，并保留 knowledge source id。
+
+#### Scenario: Keyword search finds wiki page
+
+- **WHEN** 用户使用 keyword search 查询 Wiki 页面中的术语
+- **THEN** 系统返回 sourceType 为 `wikiPage` 的结果
+
+#### Scenario: Vector search finds wiki page
+
+- **WHEN** 用户使用自然语言 vector search 查询 Wiki 页面语义相关内容
+- **THEN** 系统返回 sourceType 为 `wikiPage` 的结果
+
+#### Scenario: Filter search to wiki pages
+
+- **WHEN** 用户指定 sourceTypes 包含 `wikiPage`
+- **THEN** 系统只返回符合 source type 过滤条件的结果
+
+#### Scenario: Search distilled knowledge
+
+- **WHEN** 用户搜索已沉淀的 semantic、procedural、lesson 或 crystal 内容
+- **THEN** 系统返回 sourceType 为 `knowledge` 的结果
+
+#### Scenario: Filter search to distilled knowledge
+
+- **WHEN** 用户指定 sourceTypes 包含 `knowledge`
+- **THEN** 系统只返回符合 source type 过滤条件的 results
+
