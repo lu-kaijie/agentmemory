@@ -111,6 +111,33 @@ def test_keyword_search_finds_indexed_memory(tmp_path):
     assert result.results[0].matchSources == ["keyword"]
 
 
+def test_search_relevance_filters_generic_noise_and_supports_broad_recall(tmp_path):
+    service = _service(tmp_path)
+    service.remember(RememberRequest(content="Memory search evidence is generic but still searchable.", language="en"))
+
+    generic = service.search(SearchRequest(query="memory search", mode="keyword"))
+    broad = service.search(SearchRequest(query="memory search", mode="keyword", matchMode="any", minScore=0))
+
+    assert generic.results == []
+    assert broad.results
+
+
+def test_keyword_match_modes_and_min_score(tmp_path):
+    service = _service(tmp_path)
+    service.remember(RememberRequest(content="FastAPI backend uses typed service layers.", language="en"))
+    service.remember(RememberRequest(content="FastAPI frontend note should not satisfy backend phrase.", language="en"))
+
+    strict = service.search(SearchRequest(query="FastAPI backend", mode="keyword", matchMode="all"))
+    phrase = service.search(SearchRequest(query="typed service", mode="keyword", matchMode="phrase"))
+    high_score = service.search(SearchRequest(query="FastAPI backend", mode="keyword", matchMode="any", minScore=2.0))
+
+    assert strict.results
+    assert all("fastapi" in item.content.lower() and "backend" in item.content.lower() for item in strict.results)
+    assert len(phrase.results) == 1
+    assert "typed service" in phrase.results[0].content.lower()
+    assert high_score.results == []
+
+
 def test_vector_and_hybrid_search_preserve_evidence(tmp_path):
     service = _service(tmp_path)
     service.remember(
@@ -130,6 +157,16 @@ def test_vector_and_hybrid_search_preserve_evidence(tmp_path):
     assert hybrid.results
     assert hybrid.results[0].sourceId == vector.results[0].sourceId
     assert set(hybrid.results[0].matchSources) == {"keyword", "vector"}
+
+
+def test_vector_min_score_filters_weak_results(tmp_path):
+    service = _service(tmp_path)
+    service.remember(RememberRequest(content="RAG search combines keyword and semantic retrieval.", language="en"))
+    service.search_service.process_pending()
+
+    result = service.search(SearchRequest(query="semantic memory retrieval", mode="vector", minScore=2.0))
+
+    assert result.results == []
 
 
 def test_smart_search_uses_llm_explanation_and_evidence(tmp_path):
@@ -285,6 +322,18 @@ def test_context_uses_default_durable_sources_and_groups_results(tmp_path):
     first_source = result.evidence[0]["sourceType"]
     assert first_source in {"knowledge", "wikiPage"}
     assert f"[{first_source}:{result.evidence[0]['sourceId']}]" in result.context
+
+
+def test_context_uses_relevance_gated_evidence(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
+    service.remember(RememberRequest(content="Memory search evidence is generic but still searchable.", language="en"))
+
+    result = service.context(ContextRequest(query="memory search", sourceTypes=["memory"]))
+    broad = service.context(ContextRequest(query="memory search", sourceTypes=["memory"], matchMode="any", minScore=0))
+
+    assert result.context == ""
+    assert result.evidence == []
+    assert broad.evidence
 
 
 def test_context_honors_source_type_project_and_language_filters(tmp_path):

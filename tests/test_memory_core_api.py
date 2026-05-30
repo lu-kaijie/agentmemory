@@ -169,5 +169,7 @@ def test_rest_wiki_rebuild(tmp_path):
     assert len(rebuild.json()["jobs"]) == 6
     assert all(job["status"] == "applied" for job in rebuild.json()["jobs"])
     assert len(pages.json()["wikiPages"]) == 6
-    assert len(knowledge.json()["knowledge"]) == 24
+    knowledge_items = knowledge.json()["knowledge"]
+    assert len(knowledge_items) == 4
+    assert all(item["fingerprint"] for item in knowledge_items)
     assert jobs.json()["wikiUpdateJobs"]

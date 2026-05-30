@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 Language = Literal["zh", "en", "mixed", "unknown"]
 SourceType = Literal["observation", "memory", "summary", "wikiPage", "knowledge"]
 SearchMode = Literal["keyword", "vector", "hybrid"]
+SearchMatchMode = Literal["auto", "any", "all", "phrase"]
 KnowledgeKind = Literal["semantic", "procedural", "lesson", "crystal"]
 WikiTopic = Literal[
     "personal_preferences",
@@ -124,6 +125,10 @@ class KnowledgeRecord(BaseModel):
     concepts: list[str] = Field(default_factory=list)
     files: list[str] = Field(default_factory=list)
     confidence: float | None = None
+    fingerprint: str | None = None
+    reinforcements: int = 0
+    lastReinforcedAt: str | None = None
+    sourceGroup: str | None = None
     createdAt: str
     updatedAt: str
 
@@ -286,6 +291,8 @@ class SearchRequest(BaseModel):
     project: str | None = None
     language: Language | None = None
     sourceTypes: list[SourceType] = Field(default_factory=list)
+    minScore: float | None = Field(default=None, ge=0.0)
+    matchMode: SearchMatchMode = "auto"
 
 
 class SearchResponse(BaseModel):
@@ -314,6 +321,8 @@ class ContextRequest(BaseModel):
     project: str | None = None
     language: Language | None = None
     sourceTypes: list[SourceType] = Field(default_factory=list)
+    minScore: float | None = Field(default=None, ge=0.0)
+    matchMode: SearchMatchMode = "auto"
 
 
 class ContextResponse(BaseModel):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 
 from agentmemory.core.ids import generate_id, utc_now_iso
 from agentmemory.core.models import (
@@ -260,6 +262,7 @@ class MemoryCoreService:
             *(f"memory:{item.id}" for item in self.list_memories()),
             *(f"summary:{item.id}" for item in self.list_summaries()),
         ]
+        source_ids = self._uncovered_wiki_source_ids(source_ids)
         jobs = [self._enqueue_wiki_job(source_ids, topic=topic) for topic in topics]
         if not self.llm:
             return WikiUpdateResponse(jobs=jobs, pages=[])
@@ -451,15 +454,28 @@ class MemoryCoreService:
         proposals = parse_knowledge_xml(raw)
         records: list[KnowledgeRecord] = []
         now = utc_now_iso()
+        source_group = _knowledge_source_group(job.sourceIds)
         for proposal in proposals:
+            kind = proposal["kind"]
+            content = str(proposal["content"])
+            fingerprint = _knowledge_fingerprint(str(kind), content, source_group if kind == "crystal" else None)
+            existing = self._knowledge_by_fingerprint(fingerprint)
+            if existing:
+                updated = self._reinforce_knowledge(existing, job.sourceIds, now)
+                records.append(updated)
+                continue
             record = KnowledgeRecord(
                 id=generate_id("know"),
-                kind=proposal["kind"],
-                content=str(proposal["content"]),
+                kind=kind,
+                content=content,
                 sourceIds=job.sourceIds,
                 concepts=proposal.get("concepts") if isinstance(proposal.get("concepts"), list) else [],
                 files=proposal.get("files") if isinstance(proposal.get("files"), list) else [],
                 confidence=proposal.get("confidence") if isinstance(proposal.get("confidence"), float) else None,
+                fingerprint=fingerprint,
+                reinforcements=1 if kind == "lesson" else 0,
+                lastReinforcedAt=now if kind == "lesson" else None,
+                sourceGroup=source_group if kind == "crystal" else None,
                 createdAt=now,
                 updatedAt=now,
             )
@@ -479,6 +495,30 @@ class MemoryCoreService:
             )
             records.append(record)
         return records
+
+    def _knowledge_by_fingerprint(self, fingerprint: str) -> KnowledgeRecord | None:
+        for item in self.list_knowledge():
+            if item.fingerprint == fingerprint:
+                return item
+        return None
+
+    def _reinforce_knowledge(self, existing: KnowledgeRecord, source_ids: list[str], now: str) -> KnowledgeRecord:
+        existing.sourceIds = _dedupe_strings([*existing.sourceIds, *source_ids])
+        existing.updatedAt = now
+        if existing.kind == "lesson":
+            existing.reinforcements += 1
+            existing.lastReinforcedAt = now
+            if existing.confidence is not None:
+                existing.confidence = min(0.99, round(existing.confidence + 0.03, 3))
+        self.kv.set(KV.knowledge, existing.id, existing.model_dump())
+        if self.search_service:
+            self.search_service.index_document(knowledge_document(existing))
+        return existing
+
+    def _uncovered_wiki_source_ids(self, source_ids: list[str]) -> list[str]:
+        covered = {source_id for item in self.list_knowledge() for source_id in item.sourceIds}
+        missing = [source_id for source_id in source_ids if source_id not in covered]
+        return missing or source_ids
 
     def _apply_wiki_proposal(
         self,
@@ -556,3 +596,22 @@ class MemoryCoreService:
 
 def _dedupe_strings(items: list[str]) -> list[str]:
     return list(dict.fromkeys(item for item in items if item))
+
+
+def _normalize_knowledge_content(content: str) -> str:
+    normalized = re.sub(r"\s+", " ", content.casefold()).strip()
+    normalized = re.sub(r"[^\w\s:/.-]+", "", normalized)
+    return normalized
+
+
+def _knowledge_fingerprint(kind: str, content: str, source_group: str | None = None) -> str:
+    parts = [kind, _normalize_knowledge_content(content)]
+    if source_group:
+        parts.append(source_group)
+    payload = "\n".join(parts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _knowledge_source_group(source_ids: list[str]) -> str:
+    normalized = "|".join(sorted(source_ids))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]

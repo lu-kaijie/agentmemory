@@ -247,4 +247,27 @@ def test_wiki_rebuild_all_creates_jobs_and_pages(tmp_path):
     assert len(result.jobs) == 6
     assert all(job.status == "applied" for job in result.jobs)
     assert len(service.list_wiki_pages()) == 6
-    assert len(service.list_knowledge()) == 24
+    knowledge = service.list_knowledge()
+    assert len(knowledge) == 4
+    assert all(item.fingerprint for item in knowledge)
+    lesson = next(item for item in knowledge if item.kind == "lesson")
+    crystal = next(item for item in knowledge if item.kind == "crystal")
+    assert lesson.reinforcements == 6
+    assert lesson.lastReinforcedAt is not None
+    assert crystal.sourceGroup is not None
+
+
+def test_wiki_rebuild_reuses_existing_knowledge(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
+    service.remember(RememberRequest(content="Document project overview in Wiki.", language="en"))
+
+    first = service.rebuild_wiki(WikiRebuildRequest(all=True))
+    first_ids = {item.id for item in service.list_knowledge()}
+    second = service.rebuild_wiki(WikiRebuildRequest(all=True))
+    second_knowledge = service.list_knowledge()
+
+    assert len(first.knowledge) == 24
+    assert len(second.knowledge) == 24
+    assert {item.id for item in second_knowledge} == first_ids
+    assert len(second_knowledge) == 4
+    assert next(item for item in second_knowledge if item.kind == "lesson").reinforcements == 12

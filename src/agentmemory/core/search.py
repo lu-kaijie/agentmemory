@@ -23,6 +23,7 @@ from .models import (
     ObservationRecord,
     SearchDocument,
     SearchMode,
+    SearchMatchMode,
     SearchRequest,
     SearchResponse,
     SearchResult,
@@ -35,6 +36,42 @@ from .models import (
 
 DEFAULT_CONTEXT_SOURCE_TYPES = ["knowledge", "wikiPage", "memory", "summary"]
 CONTEXT_SOURCE_PRIORITY = {"knowledge": 0, "wikiPage": 1, "memory": 2, "summary": 3, "observation": 4}
+GENERIC_QUERY_TERMS = {
+    "agentmemory",
+    "evidence",
+    "governance",
+    "knowledge",
+    "memory",
+    "rag",
+    "search",
+    "wiki",
+    "上下文",
+    "治理",
+    "搜索",
+    "检索",
+    "记忆",
+}
+DEFAULT_KEYWORD_MIN_SCORE = 0.55
+DEFAULT_VECTOR_MIN_SCORE = 0.2
+DEFAULT_HYBRID_MIN_SCORE = 0.3
+QUESTION_OR_STOP_TERMS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "for",
+    "how",
+    "is",
+    "of",
+    "or",
+    "should",
+    "the",
+    "to",
+    "what",
+    "when",
+    "where",
+    "why",
+}
 
 
 def observation_document(observation: ObservationRecord) -> SearchDocument:
@@ -221,6 +258,8 @@ class MemorySearchService:
             project=request.project,
             language=request.language,
             source_types=request.sourceTypes,
+            min_score=request.minScore,
+            match_mode=request.matchMode,
         )
         return SearchResponse(query=request.query, mode=request.mode, results=results)
 
@@ -232,6 +271,8 @@ class MemorySearchService:
             project=request.project,
             language=request.language,
             source_types=request.sourceTypes,
+            min_score=request.minScore,
+            match_mode=request.matchMode,
         )
         evidence = [
             {"sourceType": item.sourceType, "sourceId": item.sourceId, "documentId": item.documentId}
@@ -267,6 +308,8 @@ class MemorySearchService:
             project=request.project,
             language=request.language,
             source_types=source_types,
+            min_score=request.minScore,
+            match_mode=request.matchMode,
         )
         if not results:
             return ContextResponse(
@@ -374,10 +417,13 @@ class MemorySearchService:
         project: str | None,
         language: str | None,
         source_types: list[str],
+        min_score: float | None = None,
+        match_mode: SearchMatchMode = "auto",
     ) -> list[SearchResult]:
-        keyword = self._keyword_search(query, limit) if mode in ("keyword", "hybrid") else []
-        vector = self._vector_search(query, limit) if mode in ("vector", "hybrid") else []
-        merged = self._merge(keyword, vector) if mode == "hybrid" else keyword or vector
+        fetch_limit = min(max(limit * 4, limit), 50)
+        keyword = self._keyword_search(query, fetch_limit, match_mode) if mode in ("keyword", "hybrid") else []
+        vector = self._vector_search(query, fetch_limit) if mode in ("vector", "hybrid") else []
+        merged = self._merge(keyword, vector, query) if mode == "hybrid" else keyword or vector
         filtered = [
             result
             for result in merged
@@ -385,11 +431,12 @@ class MemorySearchService:
             and (language is None or result.language == language)
             and (not source_types or result.sourceType in source_types)
         ]
-        return filtered[:limit]
+        gated = self._relevance_gate(filtered, query=query, mode=mode, min_score=min_score, match_mode=match_mode)
+        return gated[:limit]
 
-    def _keyword_search(self, query: str, limit: int) -> list[SearchResult]:
+    def _keyword_search(self, query: str, limit: int, match_mode: SearchMatchMode = "auto") -> list[SearchResult]:
         try:
-            rows = self.kv.fts_search(_fts_query(query), limit)
+            rows = self.kv.fts_search(_fts_query(query, match_mode), limit)
         except Exception:
             rows = self.kv.fts_search(_escape_fts_query(query), limit)
         return [
@@ -446,7 +493,7 @@ class MemorySearchService:
             )
         return results
 
-    def _merge(self, keyword: list[SearchResult], vector: list[SearchResult]) -> list[SearchResult]:
+    def _merge(self, keyword: list[SearchResult], vector: list[SearchResult], query: str = "") -> list[SearchResult]:
         merged: dict[tuple[str, str], SearchResult] = {}
         for result in [*keyword, *vector]:
             key = (result.sourceType, result.sourceId)
@@ -454,16 +501,73 @@ class MemorySearchService:
             if existing is None:
                 merged[key] = result.model_copy()
                 continue
-            existing.score = max(existing.score, result.score) + min(existing.score, result.score) * 0.25
+            existing.score = max(existing.score, result.score) + min(existing.score, result.score) * 0.35
             existing.matchSources = sorted(set([*existing.matchSources, *result.matchSources]))  # type: ignore[assignment]
+        query_terms = _query_terms(query)
         return sorted(
             merged.values(),
             key=lambda item: (
                 "keyword" in item.matchSources and "vector" in item.matchSources,
+                _metadata_overlap(item, query_terms),
                 item.score,
+                item.createdAt,
             ),
             reverse=True,
         )
+
+    def _relevance_gate(
+        self,
+        results: list[SearchResult],
+        query: str,
+        mode: SearchMode,
+        min_score: float | None,
+        match_mode: SearchMatchMode,
+    ) -> list[SearchResult]:
+        threshold = min_score if min_score is not None else _default_min_score(mode, match_mode)
+        query_terms = _query_terms(query)
+        generic_only = bool(query_terms) and all(term in GENERIC_QUERY_TERMS for term in query_terms)
+        gated: list[SearchResult] = []
+        for result in results:
+            effective_score = result.score
+            metadata_overlap = _metadata_overlap(result, query_terms)
+            if len(result.matchSources) > 1:
+                effective_score += 0.12
+            if metadata_overlap:
+                effective_score += 0.06
+            generic_keyword_only = generic_only and result.matchSources == ["keyword"] and metadata_overlap == 0
+            if generic_keyword_only:
+                effective_score -= 0.25
+            if match_mode == "any" and min_score is not None:
+                passes = effective_score >= threshold
+            else:
+                passes = (
+                    not generic_keyword_only
+                    and effective_score >= threshold
+                    and self._matches_keyword_mode(result, query_terms, match_mode)
+                )
+            if passes:
+                result.score = round(max(0.0, effective_score), 6)
+                gated.append(result)
+        return sorted(
+            gated,
+            key=lambda item: (
+                len(item.matchSources),
+                _metadata_overlap(item, query_terms),
+                item.score,
+                item.createdAt,
+            ),
+            reverse=True,
+        )
+
+    def _matches_keyword_mode(self, result: SearchResult, query_terms: list[str], match_mode: SearchMatchMode) -> bool:
+        if "keyword" not in result.matchSources or not query_terms:
+            return True
+        haystack = _normalize_for_match(" ".join([result.content, " ".join(result.concepts), " ".join(result.files)]))
+        if match_mode == "phrase":
+            return _normalize_for_match(" ".join(query_terms)) in haystack
+        if match_mode == "all" or (match_mode == "auto" and _strict_auto_query(query_terms)):
+            return all(term in haystack for term in query_terms if term not in GENERIC_QUERY_TERMS) or all(term in haystack for term in query_terms)
+        return True
 
     def _pending_job(self, document: SearchDocument) -> IndexJobRecord:
         now = utc_now_iso()
@@ -647,8 +751,48 @@ def _escape_fts_query(query: str) -> str:
     return f'"{escaped}"'
 
 
-def _fts_query(query: str) -> str:
-    tokens = [token for token in query.replace("-", " ").split() if token]
+def _fts_query(query: str, match_mode: SearchMatchMode = "auto") -> str:
+    stripped = query.strip()
+    if match_mode == "phrase" or (stripped.startswith('"') and stripped.endswith('"') and len(stripped) > 1):
+        return _escape_fts_query(stripped.strip('"'))
+    tokens = [token for token in stripped.replace("-", " ").split() if token]
     if not tokens:
         return _escape_fts_query(query)
+    if match_mode == "all" or (match_mode == "auto" and _strict_auto_query([token.lower() for token in tokens])):
+        return " AND ".join(_escape_fts_query(token) for token in tokens)
     return " OR ".join(_escape_fts_query(token) for token in tokens)
+
+
+def _query_terms(query: str) -> list[str]:
+    return [
+        token.lower()
+        for token in query.replace('"', " ").replace("-", " ").split()
+        if token.strip()
+    ]
+
+
+def _strict_auto_query(query_terms: list[str]) -> bool:
+    useful_terms = [term for term in query_terms if term not in GENERIC_QUERY_TERMS and term not in QUESTION_OR_STOP_TERMS]
+    has_question_or_stop = any(term in QUESTION_OR_STOP_TERMS for term in query_terms)
+    return not has_question_or_stop and 2 <= len(useful_terms) <= 3 and len(query_terms) <= 4
+
+
+def _default_min_score(mode: SearchMode, match_mode: SearchMatchMode) -> float:
+    if match_mode == "any":
+        return 0.0
+    if mode == "vector":
+        return DEFAULT_VECTOR_MIN_SCORE
+    if mode == "hybrid":
+        return DEFAULT_HYBRID_MIN_SCORE
+    return DEFAULT_KEYWORD_MIN_SCORE
+
+
+def _metadata_overlap(result: SearchResult, query_terms: list[str]) -> int:
+    if not query_terms:
+        return 0
+    metadata = {item.lower() for item in [*result.concepts, *result.files, result.language]}
+    return len(metadata.intersection(query_terms))
+
+
+def _normalize_for_match(value: str) -> str:
+    return " ".join(value.lower().replace("-", " ").split())
