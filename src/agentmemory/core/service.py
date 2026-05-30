@@ -3,6 +3,10 @@ from __future__ import annotations
 from agentmemory.core.ids import generate_id, utc_now_iso
 from agentmemory.core.models import (
     AuditRecord,
+    ForgetRequest,
+    ForgetResponse,
+    GovernanceExport,
+    IndexJobRecord,
     LLMProcessingJobRecord,
     MemoryCandidateRecord,
     MemoryRecord,
@@ -19,6 +23,13 @@ from agentmemory.core.search import MemorySearchService, memory_document, observ
 from agentmemory.providers import LLMProvider
 from agentmemory.state import StateKV
 from agentmemory.state.schema import KV
+from agentmemory.version import __version__
+
+
+class MemoryNotFoundError(ValueError):
+    def __init__(self, memory_id: str):
+        super().__init__(f"Memory not found: {memory_id}")
+        self.memory_id = memory_id
 
 
 class MemoryCoreService:
@@ -164,6 +175,15 @@ class MemoryCoreService:
         items = [MemoryRecord.model_validate(item) for item in self.kv.list(KV.memories)]
         return sorted(items, key=lambda item: item.createdAt)
 
+    def list_observations(self) -> list[ObservationRecord]:
+        observations: list[ObservationRecord] = []
+        for session in self.list_sessions():
+            observations.extend(
+                ObservationRecord.model_validate(item)
+                for item in self.kv.list(KV.observations(session.id))
+            )
+        return sorted(observations, key=lambda item: item.createdAt)
+
     def list_audit(self) -> list[AuditRecord]:
         items = [AuditRecord.model_validate(item) for item in self.kv.list(KV.audit)]
         return sorted(items, key=lambda item: item.timestamp)
@@ -179,6 +199,77 @@ class MemoryCoreService:
     def list_llm_processing_jobs(self) -> list[LLMProcessingJobRecord]:
         items = [LLMProcessingJobRecord.model_validate(item) for item in self.kv.list(KV.llm_processing_jobs)]
         return sorted(items, key=lambda item: item.startedAt)
+
+    def list_index_jobs(self) -> list[IndexJobRecord]:
+        items = [IndexJobRecord.model_validate(item) for item in self.kv.list(KV.index_jobs)]
+        return sorted(items, key=lambda item: item.startedAt)
+
+    def export_data(self, source: str = "cli") -> GovernanceExport:
+        now = utc_now_iso()
+        sessions = self.list_sessions()
+        observations = self.list_observations()
+        memories = self.list_memories()
+        summaries = self.list_summaries()
+        memory_candidates = self.list_memory_candidates()
+        llm_processing_jobs = self.list_llm_processing_jobs()
+        index_jobs = self.list_index_jobs()
+        audit = AuditRecord(
+            id=generate_id("aud"),
+            action="export",
+            targetType="governance",
+            targetId="agentmemory",
+            source=source,
+            timestamp=now,
+            details={
+                "sessions": len(sessions),
+                "observations": len(observations),
+                "memories": len(memories),
+                "summaries": len(summaries),
+                "memoryCandidates": len(memory_candidates),
+                "llmProcessingJobs": len(llm_processing_jobs),
+                "indexJobs": len(index_jobs),
+            },
+        )
+        self._record_audit(audit)
+        return GovernanceExport(
+            version=__version__,
+            exportedAt=now,
+            sessions=sessions,
+            observations=observations,
+            memories=memories,
+            summaries=summaries,
+            memoryCandidates=memory_candidates,
+            llmProcessingJobs=llm_processing_jobs,
+            indexJobs=index_jobs,
+            audit=self.list_audit(),
+        )
+
+    def forget(self, request: ForgetRequest) -> ForgetResponse:
+        raw = self.kv.get(KV.memories, request.memoryId)
+        if raw is None:
+            raise MemoryNotFoundError(request.memoryId)
+        memory = MemoryRecord.model_validate(raw)
+        if self.search_service:
+            self.search_service.delete_document("memory", request.memoryId)
+        self.kv.delete(KV.memories, request.memoryId)
+        now = utc_now_iso()
+        audit = AuditRecord(
+            id=generate_id("aud"),
+            action="forget",
+            targetType="memory",
+            targetId=request.memoryId,
+            source=request.source,
+            timestamp=now,
+            details={
+                "reason": request.reason,
+                "type": memory.type,
+                "concepts": memory.concepts,
+                "files": memory.files,
+                "language": memory.language,
+            },
+        )
+        self._record_audit(audit)
+        return ForgetResponse(memoryId=request.memoryId, auditId=audit.id, deletedMemory=memory)
 
     def search(self, request):
         if not self.search_service:

@@ -118,6 +118,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     index_status = runner.invoke(app, ["index", "status", "--json"])
     index_repair = runner.invoke(app, ["index", "repair", "--json"])
     index_rebuild = runner.invoke(app, ["index", "rebuild", "--json"])
+    exported = runner.invoke(app, ["export", "--json"])
 
     assert observe.exit_code == 0
     assert "Observation saved:" in observe.output
@@ -134,6 +135,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert index_status.exit_code == 0
     assert index_repair.exit_code == 0
     assert index_rebuild.exit_code == 0
+    assert exported.exit_code == 0
 
     session_items = json.loads(sessions.output)["sessions"]
     memory_items = json.loads(memories.output)["memories"]
@@ -144,6 +146,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     search_items = json.loads(search.output)["results"]
     smart_payload = json.loads(smart.output)
     index_payload = json.loads(index_status.output)
+    export_payload = json.loads(exported.output)
 
     assert session_items[0]["id"] == "ses_cli"
     assert session_items[0]["observationCount"] == 1
@@ -156,6 +159,49 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert smart_payload["answer"] == "stub explanation"
     assert smart_payload["evidence"]
     assert index_payload["documents"] >= 2
+    assert export_payload["memories"][0]["content"] == "CLI list commands support JSON output."
+    assert export_payload["audit"][-1]["action"] == "export"
+
+
+def test_memory_governance_cli_commands(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTMEMORY_DB_PATH", str(tmp_path / "governance-cli.sqlite3"))
+    monkeypatch.setenv("AGENTMEMORY_VECTOR_DB_PATH", str(tmp_path / "vector"))
+    _set_ai_env(monkeypatch)
+    monkeypatch.setattr(cli_module, "create_provider_bundle", lambda _settings: _StubProviderBundle())
+    runner = CliRunner()
+
+    remember = runner.invoke(
+        app,
+        [
+            "remember",
+            "--content",
+            "CLI forget removes this memory.",
+            "--language",
+            "en",
+            "--json",
+        ],
+    )
+    memory_id = json.loads(remember.output)["memoryId"]
+    before = runner.invoke(app, ["search", "CLI forget", "--mode", "keyword", "--json"])
+    forget = runner.invoke(app, ["forget", "--memory-id", memory_id, "--reason", "cli test", "--json"])
+    after_memories = runner.invoke(app, ["memories", "--json"])
+    after_search = runner.invoke(app, ["search", "CLI forget", "--mode", "hybrid", "--json"])
+    audit = runner.invoke(app, ["audit", "--json"])
+    missing = runner.invoke(app, ["forget", "--memory-id", memory_id, "--json"])
+
+    assert remember.exit_code == 0
+    assert json.loads(before.output)["results"]
+    assert forget.exit_code == 0
+    forget_payload = json.loads(forget.output)
+    assert forget_payload["memoryId"] == memory_id
+    assert forget_payload["auditId"].startswith("aud_")
+    assert after_memories.exit_code == 0
+    assert json.loads(after_memories.output)["memories"] == []
+    assert after_search.exit_code == 0
+    assert json.loads(after_search.output)["results"] == []
+    assert [item["action"] for item in json.loads(audit.output)["audit"]] == ["remember", "forget"]
+    assert missing.exit_code == 1
+    assert json.loads(missing.output)["error"] == "memory_not_found"
 
 
 def test_memory_core_cli_commands_require_ai_settings(monkeypatch, tmp_path):

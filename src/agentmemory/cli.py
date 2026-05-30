@@ -7,9 +7,9 @@ import uvicorn
 
 from agentmemory.api.app import create_app
 from agentmemory.config import get_settings
-from agentmemory.core.models import ObserveRequest, RememberRequest, SearchRequest, SmartSearchRequest
+from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest, SearchRequest, SmartSearchRequest
 from agentmemory.core.search import MemorySearchService
-from agentmemory.core.service import MemoryCoreService
+from agentmemory.core.service import MemoryCoreService, MemoryNotFoundError
 from agentmemory.providers import MissingAIProviderSettings, create_provider_bundle
 from agentmemory.state import StateKV
 
@@ -187,6 +187,40 @@ def list_audit(json_output: bool = typer.Option(False, "--json", help="Output JS
     else:
         for item in items:
             typer.echo(f"{item['id']} {item['action']} {item['targetType']}:{item['targetId']}")
+
+
+@app.command("export")
+def export_command(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """Export governance data."""
+    result = _memory_core().export_data().model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(
+            f"Exported sessions={len(result['sessions'])} observations={len(result['observations'])} "
+            f"memories={len(result['memories'])} audit={len(result['audit'])}",
+        )
+
+
+@app.command("forget")
+def forget_command(
+    memory_id: str = typer.Option(..., "--memory-id", help="Memory id to delete."),
+    reason: str | None = typer.Option(None, "--reason", help="Reason for deletion."),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Delete an explicit long-term memory by id."""
+    try:
+        result = _memory_core().forget(ForgetRequest(memoryId=memory_id, reason=reason)).model_dump()
+    except MemoryNotFoundError as exc:
+        if json_output:
+            _emit({"error": "memory_not_found", "memoryId": exc.memory_id}, True)
+        else:
+            typer.echo(f"Memory not found: {exc.memory_id}", err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Memory forgotten: {result['memoryId']} audit={result['auditId']}")
 
 
 @app.command("summaries")

@@ -179,6 +179,13 @@ class StateKV:
         with self.engine.begin() as connection:
             connection.execute(text("DELETE FROM search_fts"))
 
+    def fts_delete(self, document_id: str) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM search_fts WHERE document_id = :document_id"),
+                {"document_id": document_id},
+            )
+
     def fts_count(self) -> int:
         with self.engine.begin() as connection:
             return int(connection.execute(text("SELECT COUNT(*) FROM search_fts")).scalar_one())

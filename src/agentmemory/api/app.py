@@ -4,13 +4,14 @@ import asyncio
 from contextlib import asynccontextmanager
 from importlib import resources
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from agentmemory.config import Settings, get_settings
 from agentmemory.core import MemoryCoreService
-from agentmemory.core.models import ObserveRequest, RememberRequest, SearchRequest, SmartSearchRequest
+from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest, SearchRequest, SmartSearchRequest
 from agentmemory.core.search import MemorySearchService
+from agentmemory.core.service import MemoryNotFoundError
 from agentmemory.providers import create_provider_bundle
 from agentmemory.state import StateKV
 from agentmemory.version import __version__
@@ -100,6 +101,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def audit() -> dict[str, object]:
         items = app.state.memory_core.list_audit()
         return {"audit": [item.model_dump() for item in items]}
+
+    @app.get("/agentmemory/export")
+    def export_data() -> dict[str, object]:
+        return app.state.memory_core.export_data(source="rest").model_dump()
+
+    @app.post("/agentmemory/forget")
+    def forget(payload: ForgetRequest) -> dict[str, object]:
+        try:
+            return app.state.memory_core.forget(payload).model_dump()
+        except MemoryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail={"error": "memory_not_found", "memoryId": exc.memory_id}) from exc
 
     @app.get("/agentmemory/summaries")
     def summaries() -> dict[str, object]:

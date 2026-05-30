@@ -91,12 +91,14 @@ class AuditRecord(BaseModel):
     action: Literal[
         "observe",
         "remember",
+        "export",
+        "forget",
         "llm_processing_done",
         "llm_processing_failed",
         "index_done",
         "index_failed",
     ]
-    targetType: Literal["observation", "memory", "llm_processing_job", "index_job"]
+    targetType: Literal["observation", "memory", "llm_processing_job", "index_job", "governance"]
     targetId: str
     source: str
     timestamp: str
@@ -139,6 +141,31 @@ class RememberRequest(BaseModel):
 class RememberResponse(BaseModel):
     memoryId: str
     memory: MemoryRecord
+
+
+class ForgetRequest(BaseModel):
+    memoryId: str = Field(min_length=1)
+    source: str = "cli"
+    reason: str | None = None
+
+
+class ForgetResponse(BaseModel):
+    memoryId: str
+    auditId: str
+    deletedMemory: MemoryRecord
+
+
+class GovernanceExport(BaseModel):
+    version: str
+    exportedAt: str
+    sessions: list[SessionRecord] = Field(default_factory=list)
+    observations: list[ObservationRecord] = Field(default_factory=list)
+    memories: list[MemoryRecord] = Field(default_factory=list)
+    summaries: list[SummaryRecord] = Field(default_factory=list)
+    memoryCandidates: list[MemoryCandidateRecord] = Field(default_factory=list)
+    llmProcessingJobs: list[LLMProcessingJobRecord] = Field(default_factory=list)
+    indexJobs: list["IndexJobRecord"] = Field(default_factory=list)
+    audit: list[AuditRecord] = Field(default_factory=list)
 
 
 class SearchDocument(BaseModel):

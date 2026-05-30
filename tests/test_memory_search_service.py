@@ -1,5 +1,6 @@
 from agentmemory.config import Settings
 from agentmemory.core.models import (
+    ForgetRequest,
     ObserveRequest,
     RememberRequest,
     SearchRequest,
@@ -205,3 +206,26 @@ def test_vector_search_recovers_from_stale_dimension_table(tmp_path):
 
     assert result.results
     assert service.index_status().failedJobs == 0
+
+
+def test_forget_removes_memory_from_keyword_vector_and_hybrid_search(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider())
+    remembered = service.remember(
+        RememberRequest(
+            content="Governance forget removes searchable memory evidence.",
+            language="en",
+            concepts=["governance", "search"],
+        ),
+    )
+    service.search_service.process_pending()
+
+    assert service.search(SearchRequest(query="Governance", mode="keyword")).results
+    assert service.search(SearchRequest(query="searchable memory evidence", mode="vector")).results
+    assert service.search(SearchRequest(query="Governance memory", mode="hybrid")).results
+
+    service.forget(ForgetRequest(memoryId=remembered.memoryId, reason="test cleanup"))
+
+    assert service.list_memories() == []
+    assert service.search(SearchRequest(query="Governance", mode="keyword")).results == []
+    assert service.search(SearchRequest(query="searchable memory evidence", mode="vector")).results == []
+    assert service.search(SearchRequest(query="Governance memory", mode="hybrid")).results == []

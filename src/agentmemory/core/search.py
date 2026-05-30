@@ -108,6 +108,21 @@ class MemorySearchService:
         self.kv.set(KV.index_jobs, job.id, job.model_dump())
         return job
 
+    def delete_document(self, source_type: str, source_id: str) -> bool:
+        document_id = f"doc_{source_type}_{source_id}"
+        if self._vector_table_exists():
+            try:
+                self._table().delete(f"document_id = '{document_id}'")
+            except Exception as exc:
+                raise RuntimeError(f"failed to delete vector document {document_id}: {exc}") from exc
+        existed = self.kv.delete(KV.search_documents, document_id)
+        self.kv.fts_delete(document_id)
+        for raw in self.kv.list(KV.index_jobs):
+            job = IndexJobRecord.model_validate(raw)
+            if job.targetType == source_type and job.targetId == source_id:
+                self.kv.delete(KV.index_jobs, job.id)
+        return existed
+
     async def run_pending_worker(self, stop_event: asyncio.Event, interval_seconds: float = 1.0) -> None:
         while not stop_event.is_set():
             await asyncio.to_thread(self.process_pending, 25)

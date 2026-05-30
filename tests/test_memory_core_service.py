@@ -1,5 +1,7 @@
-from agentmemory.core.models import ObserveRequest, RememberRequest
-from agentmemory.core.service import MemoryCoreService
+import pytest
+
+from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest
+from agentmemory.core.service import MemoryCoreService, MemoryNotFoundError
 from agentmemory.state import StateKV
 from conftest import StubLLMProvider
 
@@ -151,3 +153,46 @@ def test_multilingual_duplicate_candidate_is_not_merged(tmp_path):
     assert len(memories) == 2
     assert {memory.language for memory in memories} == {"zh", "en"}
     assert all(memory.duplicateOf is None for memory in memories)
+
+
+def test_export_data_writes_audit_and_includes_governance_records(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
+    service.observe(ObserveRequest(sessionId="ses_export", content="Export should include observations.", language="en"))
+    service.remember(RememberRequest(content="Export should include memories.", language="en"))
+
+    exported = service.export_data(source="test")
+
+    assert exported.version
+    assert exported.exportedAt
+    assert len(exported.sessions) == 1
+    assert len(exported.observations) == 1
+    assert len(exported.memories) == 1
+    assert len(exported.summaries) == 1
+    assert len(exported.memoryCandidates) == 1
+    assert len(exported.llmProcessingJobs) == 1
+    assert exported.audit[-1].action == "export"
+    assert exported.audit[-1].targetType == "governance"
+    assert exported.audit[-1].details["memories"] == 1
+
+
+def test_forget_deletes_memory_and_writes_audit(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"))
+    remembered = service.remember(RememberRequest(content="Forget this memory.", language="en"))
+
+    result = service.forget(ForgetRequest(memoryId=remembered.memoryId, reason="incorrect"))
+
+    assert result.memoryId == remembered.memoryId
+    assert result.deletedMemory.content == "Forget this memory."
+    assert service.list_memories() == []
+    assert service.list_audit()[-1].action == "forget"
+    assert service.list_audit()[-1].targetId == remembered.memoryId
+    assert service.list_audit()[-1].details["reason"] == "incorrect"
+
+
+def test_forget_missing_memory_does_not_write_success_audit(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"))
+
+    with pytest.raises(MemoryNotFoundError):
+        service.forget(ForgetRequest(memoryId="mem_missing"))
+
+    assert service.list_audit() == []
