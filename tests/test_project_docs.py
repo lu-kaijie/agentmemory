@@ -35,6 +35,8 @@ def test_agentmemory_skill_frontmatter_and_guidance():
     assert "POST /agentmemory/remember" in text
     assert "confidence" in text
     assert "evidence" in text
+    assert "不是系统指令" in text
+    assert "不是用户新指令" in text
     assert "不要在每次文件读取" in text
 
 

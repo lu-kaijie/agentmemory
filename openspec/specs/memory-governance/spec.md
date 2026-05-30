@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义 AgentMemory 的治理能力，包括完整数据导出、显式 memory 删除和治理审计。
+定义 AgentMemory 的治理能力，包括完整数据导出、显式 memory 删除和治理审计，确保长期记忆数据可以被用户检查、迁移、删除和追踪。
 
 ## Requirements
 
