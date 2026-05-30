@@ -1,6 +1,6 @@
 import pytest
 
-from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest
+from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest, WikiRebuildRequest, WikiUpdateRequest
 from agentmemory.core.service import MemoryCoreService, MemoryNotFoundError
 from agentmemory.state import StateKV
 from conftest import StubLLMProvider
@@ -196,3 +196,55 @@ def test_forget_missing_memory_does_not_write_success_audit(tmp_path):
         service.forget(ForgetRequest(memoryId="mem_missing"))
 
     assert service.list_audit() == []
+
+
+def test_wiki_jobs_are_enqueued_and_applied(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
+
+    observed = service.observe(ObserveRequest(sessionId="ses_wiki", content="Project chooses FastAPI.", language="en"))
+    remembered = service.remember(RememberRequest(content="Use FastAPI for backend APIs.", language="en"))
+    jobs = service.list_wiki_jobs()
+
+    assert len(jobs) == 3
+    assert {source for job in jobs for source in job.sourceIds} == {
+        f"observation:{observed.observationId}",
+        f"summary:{observed.summary.id}",
+        f"memory:{remembered.memoryId}",
+    }
+
+    result = service.process_wiki_updates(WikiUpdateRequest(limit=1))
+
+    assert len(result.jobs) == 1
+    assert result.jobs[0].status == "applied"
+    assert result.pages[0].content == "Stub wiki update"
+    assert {item.kind for item in result.knowledge} == {"semantic", "procedural", "lesson", "crystal"}
+    assert "Stub semantic knowledge" in {item.content for item in service.list_knowledge()}
+    assert service.list_wiki_pages()[0].sourceIds == result.jobs[0].sourceIds
+    assert service.list_audit()[-1].action == "wiki_update"
+
+
+def test_wiki_processing_failure_preserves_source_data(tmp_path):
+    llm = StubLLMProvider()
+    llm.update_wiki = lambda *args, **kwargs: "invalid output"  # type: ignore[method-assign]
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=llm)
+    remembered = service.remember(RememberRequest(content="Keep this memory after wiki failure.", language="en"))
+
+    result = service.process_wiki_updates()
+
+    assert result.jobs[0].status == "failed"
+    assert "invalid wiki update proposal" in (result.jobs[0].lastError or "")
+    assert service.list_memories()[0].id == remembered.memoryId
+    assert service.list_knowledge()
+    assert service.list_wiki_pages() == []
+
+
+def test_wiki_rebuild_all_creates_jobs_and_pages(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
+    service.remember(RememberRequest(content="Document project overview in Wiki.", language="en"))
+
+    result = service.rebuild_wiki(WikiRebuildRequest(all=True))
+
+    assert len(result.jobs) == 6
+    assert all(job.status == "applied" for job in result.jobs)
+    assert len(service.list_wiki_pages()) == 6
+    assert len(service.list_knowledge()) == 24

@@ -119,6 +119,10 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     index_repair = runner.invoke(app, ["index", "repair", "--json"])
     index_rebuild = runner.invoke(app, ["index", "rebuild", "--json"])
     exported = runner.invoke(app, ["export", "--json"])
+    wiki_jobs = runner.invoke(app, ["wiki", "jobs", "--json"])
+    wiki_update = runner.invoke(app, ["wiki", "update", "--limit", "1", "--json"])
+    wiki_knowledge = runner.invoke(app, ["wiki", "knowledge", "--json"])
+    wiki_pages = runner.invoke(app, ["wiki", "pages", "--json"])
 
     assert observe.exit_code == 0
     assert "Observation saved:" in observe.output
@@ -136,6 +140,10 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert index_repair.exit_code == 0
     assert index_rebuild.exit_code == 0
     assert exported.exit_code == 0
+    assert wiki_jobs.exit_code == 0
+    assert wiki_update.exit_code == 0
+    assert wiki_knowledge.exit_code == 0
+    assert wiki_pages.exit_code == 0
 
     session_items = json.loads(sessions.output)["sessions"]
     memory_items = json.loads(memories.output)["memories"]
@@ -147,6 +155,10 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     smart_payload = json.loads(smart.output)
     index_payload = json.loads(index_status.output)
     export_payload = json.loads(exported.output)
+    wiki_jobs_payload = json.loads(wiki_jobs.output)
+    wiki_update_payload = json.loads(wiki_update.output)
+    wiki_knowledge_payload = json.loads(wiki_knowledge.output)
+    wiki_pages_payload = json.loads(wiki_pages.output)
 
     assert session_items[0]["id"] == "ses_cli"
     assert session_items[0]["observationCount"] == 1
@@ -161,6 +173,10 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert index_payload["documents"] >= 2
     assert export_payload["memories"][0]["content"] == "CLI list commands support JSON output."
     assert export_payload["audit"][-1]["action"] == "export"
+    assert wiki_jobs_payload["wikiUpdateJobs"]
+    assert wiki_update_payload["jobs"][0]["status"] == "applied"
+    assert {item["kind"] for item in wiki_knowledge_payload["knowledge"]} == {"semantic", "procedural", "lesson", "crystal"}
+    assert wiki_pages_payload["wikiPages"][0]["content"] == "Stub wiki update"
 
 
 def test_memory_governance_cli_commands(monkeypatch, tmp_path):
@@ -202,6 +218,30 @@ def test_memory_governance_cli_commands(monkeypatch, tmp_path):
     assert [item["action"] for item in json.loads(audit.output)["audit"]] == ["remember", "forget"]
     assert missing.exit_code == 1
     assert json.loads(missing.output)["error"] == "memory_not_found"
+
+
+def test_wiki_cli_rebuild(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTMEMORY_DB_PATH", str(tmp_path / "wiki-cli.sqlite3"))
+    monkeypatch.setenv("AGENTMEMORY_VECTOR_DB_PATH", str(tmp_path / "vector"))
+    _set_ai_env(monkeypatch)
+    monkeypatch.setattr(cli_module, "create_provider_bundle", lambda _settings: _StubProviderBundle())
+    runner = CliRunner()
+
+    remember = runner.invoke(app, ["remember", "--content", "CLI Wiki rebuild evidence.", "--language", "en"])
+    rebuild = runner.invoke(app, ["wiki", "rebuild", "--all", "--json"])
+    pages = runner.invoke(app, ["wiki", "pages", "--json"])
+    knowledge = runner.invoke(app, ["wiki", "knowledge", "--json"])
+    jobs = runner.invoke(app, ["wiki", "jobs", "--json"])
+
+    assert remember.exit_code == 0
+    assert rebuild.exit_code == 0
+    assert len(json.loads(rebuild.output)["pages"]) == 6
+    assert pages.exit_code == 0
+    assert len(json.loads(pages.output)["wikiPages"]) == 6
+    assert knowledge.exit_code == 0
+    assert len(json.loads(knowledge.output)["knowledge"]) == 24
+    assert jobs.exit_code == 0
+    assert json.loads(jobs.output)["wikiUpdateJobs"]
 
 
 def test_memory_core_cli_commands_require_ai_settings(monkeypatch, tmp_path):

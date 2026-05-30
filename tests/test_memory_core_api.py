@@ -52,6 +52,9 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     index_repair = client.post("/agentmemory/index/repair")
     index_rebuild = client.post("/agentmemory/index/rebuild")
     exported = client.get("/agentmemory/export")
+    wiki_jobs = client.get("/agentmemory/wiki/jobs")
+    wiki_update = client.post("/agentmemory/wiki/update", json={"limit": 1})
+    wiki_pages = client.get("/agentmemory/wiki/pages")
 
     assert observe.status_code == 200
     assert observe.json()["sessionId"] == "ses_api"
@@ -78,6 +81,12 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert exported.status_code == 200
     assert exported.json()["memories"][0]["content"] == "Memory core does not perform RAG indexing."
     assert exported.json()["audit"][-1]["action"] == "export"
+    assert wiki_jobs.status_code == 200
+    assert wiki_jobs.json()["wikiUpdateJobs"]
+    assert wiki_update.status_code == 200
+    assert wiki_update.json()["jobs"][0]["status"] == "applied"
+    assert wiki_pages.status_code == 200
+    assert wiki_pages.json()["wikiPages"][0]["content"] == "Stub wiki update"
 
 
 def test_rest_export_redacts_secrets_and_forget_memory(tmp_path):
@@ -127,3 +136,33 @@ def test_rest_export_redacts_secrets_and_forget_memory(tmp_path):
     assert memories.json()["memories"] == []
     assert search.json()["results"] == []
     assert [item["action"] for item in audit.json()["audit"]] == ["remember", "export", "forget"]
+
+
+def test_rest_wiki_rebuild(tmp_path):
+    app = create_app(ai_settings(tmp_path / "wiki-api.sqlite3"))
+    app.state.providers = type(
+        "Providers",
+        (),
+        {
+            "llm": StubLLMProvider(),
+            "embedding": StubEmbeddingProvider(),
+            "health_summary": lambda _self: {},
+        },
+    )()
+    app.state.memory_core.llm = app.state.providers.llm
+    app.state.search_service.embedding = app.state.providers.embedding
+    app.state.search_service.llm = app.state.providers.llm
+    client = TestClient(app)
+
+    client.post("/agentmemory/remember", json={"content": "REST Wiki rebuild evidence.", "language": "en"})
+    rebuild = client.post("/agentmemory/wiki/rebuild", json={"all": True})
+    pages = client.get("/agentmemory/wiki/pages")
+    knowledge = client.get("/agentmemory/wiki/knowledge")
+    jobs = client.get("/agentmemory/wiki/jobs")
+
+    assert rebuild.status_code == 200
+    assert len(rebuild.json()["jobs"]) == 6
+    assert all(job["status"] == "applied" for job in rebuild.json()["jobs"])
+    assert len(pages.json()["wikiPages"]) == 6
+    assert len(knowledge.json()["knowledge"]) == 24
+    assert jobs.json()["wikiUpdateJobs"]

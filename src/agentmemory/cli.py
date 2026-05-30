@@ -7,7 +7,15 @@ import uvicorn
 
 from agentmemory.api.app import create_app
 from agentmemory.config import get_settings
-from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest, SearchRequest, SmartSearchRequest
+from agentmemory.core.models import (
+    ForgetRequest,
+    ObserveRequest,
+    RememberRequest,
+    SearchRequest,
+    SmartSearchRequest,
+    WikiRebuildRequest,
+    WikiUpdateRequest,
+)
 from agentmemory.core.search import MemorySearchService
 from agentmemory.core.service import MemoryCoreService, MemoryNotFoundError
 from agentmemory.providers import MissingAIProviderSettings, create_provider_bundle
@@ -15,7 +23,9 @@ from agentmemory.state import StateKV
 
 app = typer.Typer(help="AgentMemory local service")
 index_app = typer.Typer(help="Search index commands")
+wiki_app = typer.Typer(help="Wiki commands")
 app.add_typer(index_app, name="index")
+app.add_typer(wiki_app, name="wiki")
 
 
 @app.command()
@@ -342,3 +352,65 @@ def index_repair(json_output: bool = typer.Option(False, "--json", help="Output 
         _emit(result, True)
     else:
         typer.echo(f"Repaired {result['documents']} document(s)")
+
+
+@wiki_app.command("pages")
+def wiki_pages(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List Wiki pages."""
+    items = [item.model_dump() for item in _memory_core().list_wiki_pages()]
+    if json_output:
+        _emit({"wikiPages": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} [{item['topic']}] {item['title']}")
+
+
+@wiki_app.command("jobs")
+def wiki_jobs(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List Wiki update jobs."""
+    items = [item.model_dump() for item in _memory_core().list_wiki_jobs()]
+    if json_output:
+        _emit({"wikiUpdateJobs": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} topic={item['topic']} status={item['status']}")
+
+
+@wiki_app.command("knowledge")
+def wiki_knowledge(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List distilled Wiki knowledge records."""
+    items = [item.model_dump() for item in _memory_core().list_knowledge()]
+    if json_output:
+        _emit({"knowledge": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} [{item['kind']}] {item['content']}")
+
+
+@wiki_app.command("update")
+def wiki_update(
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Process pending Wiki update jobs."""
+    result = _memory_core().process_wiki_updates(WikiUpdateRequest(limit=limit)).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Processed {len(result['jobs'])} wiki job(s), updated {len(result['pages'])} page(s)")
+
+
+@wiki_app.command("rebuild")
+def wiki_rebuild(
+    topic: str | None = typer.Option(None, "--topic", help="Wiki topic to rebuild."),
+    all_topics: bool = typer.Option(False, "--all", help="Rebuild all fixed Wiki topics."),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Rebuild Wiki pages from existing memory evidence."""
+    result = _memory_core().rebuild_wiki(
+        WikiRebuildRequest(topic=topic, all=all_topics),  # type: ignore[arg-type]
+    ).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Rebuilt {len(result['pages'])} wiki page(s)")

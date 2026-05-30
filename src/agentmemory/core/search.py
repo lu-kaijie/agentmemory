@@ -16,6 +16,7 @@ from .ids import generate_id, utc_now_iso
 from .models import (
     IndexJobRecord,
     IndexStatus,
+    KnowledgeRecord,
     MemoryRecord,
     ObservationRecord,
     SearchDocument,
@@ -26,6 +27,7 @@ from .models import (
     SmartSearchRequest,
     SmartSearchResponse,
     SummaryRecord,
+    WikiPageRecord,
 )
 
 
@@ -72,6 +74,42 @@ def summary_document(summary: SummaryRecord, observation: ObservationRecord | No
         files=observation.files if observation else [],
         concepts=observation.concepts if observation else [],
         createdAt=summary.createdAt,
+    )
+
+
+def wiki_page_document(page: WikiPageRecord) -> SearchDocument:
+    return SearchDocument(
+        id=f"doc_wikiPage_{page.id}",
+        sourceType="wikiPage",
+        sourceId=page.id,
+        content=f"{page.title}\n\n{page.content}",
+        searchableText=_searchable_text(
+            f"{page.title}\n{page.topic}\n{page.content}\n{' '.join(page.sourceIds)}",
+            [],
+            [page.topic],
+        ),
+        language="mixed",
+        files=[],
+        concepts=[page.topic],
+        createdAt=page.updatedAt,
+    )
+
+
+def knowledge_document(record: KnowledgeRecord) -> SearchDocument:
+    return SearchDocument(
+        id=f"doc_knowledge_{record.id}",
+        sourceType="knowledge",
+        sourceId=record.id,
+        content=f"{record.kind}\n\n{record.content}",
+        searchableText=_searchable_text(
+            f"{record.kind}\n{record.content}\n{' '.join(record.sourceIds)}",
+            record.files,
+            [record.kind, *record.concepts],
+        ),
+        language="mixed",
+        files=record.files,
+        concepts=[record.kind, *record.concepts],
+        createdAt=record.updatedAt,
     )
 
 
@@ -484,6 +522,10 @@ class MemorySearchService:
         for item in self.kv.list(KV.summaries):
             summary = SummaryRecord.model_validate(item)
             documents.append(summary_document(summary, observations_by_id.get(summary.observationId)))
+        for item in self.kv.list(KV.knowledge):
+            documents.append(knowledge_document(KnowledgeRecord.model_validate(item)))
+        for item in self.kv.list(KV.wiki_pages):
+            documents.append(wiki_page_document(WikiPageRecord.model_validate(item)))
         return documents
 
 

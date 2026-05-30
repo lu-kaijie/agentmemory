@@ -158,8 +158,11 @@
         <button data-tab="memories">Memories</button>
         <button data-tab="sessions">Sessions</button>
         <button data-tab="summaries">Summaries</button>
+        <button data-tab="wiki">Wiki</button>
+        <button data-tab="knowledge">Knowledge</button>
         <button data-tab="candidates">Candidates</button>
         <button data-tab="jobs">LLM Jobs</button>
+        <button data-tab="wikiJobs">Wiki Jobs</button>
         <button data-tab="audit">Audit</button>
         <button data-tab="graph">Graph</button>
       </div>
@@ -175,8 +178,11 @@
       sessions: [],
       memories: [],
       summaries: [],
+      wikiPages: [],
+      knowledge: [],
       candidates: [],
       jobs: [],
+      wikiJobs: [],
       audit: [],
       search: null,
       smart: null,
@@ -208,14 +214,17 @@
     async function loadAll() {
       state.error = null;
       try {
-        const [health, index, sessions, memories, summaries, candidates, jobs, audit] = await Promise.all([
+        const [health, index, sessions, memories, summaries, wikiPages, knowledge, candidates, jobs, wikiJobs, audit] = await Promise.all([
           api('/agentmemory/health'),
           api('/agentmemory/index/status'),
           api('/agentmemory/sessions'),
           api('/agentmemory/memories'),
           api('/agentmemory/summaries'),
+          api('/agentmemory/wiki/pages'),
+          api('/agentmemory/wiki/knowledge'),
           api('/agentmemory/memory-candidates'),
           api('/agentmemory/llm-processing-jobs'),
+          api('/agentmemory/wiki/jobs'),
           api('/agentmemory/audit'),
         ]);
         state.health = health;
@@ -223,8 +232,11 @@
         state.sessions = sessions.sessions || [];
         state.memories = memories.memories || [];
         state.summaries = summaries.summaries || [];
+        state.wikiPages = wikiPages.wikiPages || [];
+        state.knowledge = knowledge.knowledge || [];
         state.candidates = candidates.memoryCandidates || [];
         state.jobs = jobs.llmProcessingJobs || [];
+        state.wikiJobs = wikiJobs.wikiUpdateJobs || [];
         state.audit = audit.audit || [];
       } catch (err) {
         state.error = err.message || String(err);
@@ -272,8 +284,11 @@
         memories: () => renderList('Memories', state.memories, 'memory'),
         sessions: () => renderList('Sessions', state.sessions, 'session'),
         summaries: () => renderList('Summaries', state.summaries, 'summary'),
+        wiki: () => renderList('Wiki Pages', state.wikiPages, 'wikiPage'),
+        knowledge: () => renderList('Distilled Knowledge', state.knowledge, 'knowledge'),
         candidates: () => renderList('Memory Candidates', state.candidates, 'candidate'),
         jobs: () => renderList('LLM Processing Jobs', state.jobs, 'job'),
+        wikiJobs: () => renderList('Wiki Update Jobs', state.wikiJobs, 'wikiJob'),
         audit: () => renderList('Audit', state.audit, 'audit'),
         graph: renderGraph,
       };
@@ -324,11 +339,13 @@
       const title = item.type || item.action || item.status || item.sourceType || kind;
       const body = item.content || item.answer || item.lastError || item.details && JSON.stringify(item.details) || JSON.stringify(item);
       const tags = [
+        item.topic || item.kind,
         ...(item.concepts || []),
         ...(item.files || []),
         item.project,
         item.language,
         item.sessionId,
+        item.confidence != null ? `confidence:${item.confidence}` : null,
         ...(item.matchSources || []),
       ].filter(Boolean).slice(0, 8);
       return `
@@ -412,6 +429,26 @@
         const sessionId = state.sessions.find(session => session.id === job?.sessionId)?.id;
         if (sessionId) addEdge(`summary:${summary.id}`, `session:${sessionId}`, 'derived_from');
       }
+      for (const page of state.wikiPages) {
+        addNode(`wiki:${page.id}`, 'wikiPage', page.title || page.topic);
+        for (const sourceId of page.sourceIds || []) {
+          const [sourceType, id] = sourceId.split(':');
+          const nodeId = sourceType === 'memory' ? `memory:${id}` : sourceType === 'summary' ? `summary:${id}` : null;
+          if (nodeId && nodes.has(nodeId)) addEdge(`wiki:${page.id}`, nodeId, 'derived_from');
+        }
+      }
+      for (const item of state.knowledge) {
+        addNode(`knowledge:${item.id}`, 'knowledge', short(item.content, 32));
+        for (const concept of item.concepts || []) {
+          addNode(`concept:${concept}`, 'concept', concept);
+          addEdge(`knowledge:${item.id}`, `concept:${concept}`, 'mentions');
+        }
+        for (const sourceId of item.sourceIds || []) {
+          const [sourceType, id] = sourceId.split(':');
+          const nodeId = sourceType === 'memory' ? `memory:${id}` : sourceType === 'summary' ? `summary:${id}` : null;
+          if (nodeId && nodes.has(nodeId)) addEdge(`knowledge:${item.id}`, nodeId, 'derived_from');
+        }
+      }
       return { nodes: [...nodes.values()].slice(0, 80), edges: edges.slice(0, 140) };
     }
 
@@ -421,6 +458,8 @@
         session: '#16803c',
         memory: '#9b5de5',
         summary: '#f59e0b',
+        wikiPage: '#db2777',
+        knowledge: '#7c3aed',
         concept: '#0f766e',
         file: '#64748b',
       }[type] || '#667085';

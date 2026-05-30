@@ -21,7 +21,16 @@ class LLMProvider(Protocol):
     def compress_context(self, items: list[dict[str, Any]], token_budget: int) -> str:
         ...
 
-    def update_wiki(self, page_title: str, current_content: str, evidence: list[dict[str, Any]]) -> str:
+    def update_wiki(
+        self,
+        topic: str,
+        page_title: str,
+        current_content: str,
+        evidence: list[dict[str, Any]],
+    ) -> str:
+        ...
+
+    def distill_knowledge(self, evidence: list[dict[str, Any]]) -> str:
         ...
 
 

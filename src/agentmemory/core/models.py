@@ -6,8 +6,27 @@ from pydantic import BaseModel, Field
 
 
 Language = Literal["zh", "en", "mixed", "unknown"]
-SourceType = Literal["observation", "memory", "summary"]
+SourceType = Literal["observation", "memory", "summary", "wikiPage", "knowledge"]
 SearchMode = Literal["keyword", "vector", "hybrid"]
+KnowledgeKind = Literal["semantic", "procedural", "lesson", "crystal"]
+WikiTopic = Literal[
+    "personal_preferences",
+    "project_overview",
+    "technical_decisions",
+    "troubleshooting",
+    "files_and_modules",
+    "workflow_habits",
+]
+
+
+WIKI_TOPICS: tuple[WikiTopic, ...] = (
+    "personal_preferences",
+    "project_overview",
+    "technical_decisions",
+    "troubleshooting",
+    "files_and_modules",
+    "workflow_habits",
+)
 
 
 class SessionRecord(BaseModel):
@@ -86,6 +105,41 @@ class LLMProcessingJobRecord(BaseModel):
     finishedAt: str | None = None
 
 
+class WikiPageRecord(BaseModel):
+    id: str
+    title: str
+    topic: WikiTopic
+    content: str
+    sourceIds: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+    createdAt: str
+    updatedAt: str
+
+
+class KnowledgeRecord(BaseModel):
+    id: str
+    kind: KnowledgeKind
+    content: str
+    sourceIds: list[str] = Field(default_factory=list)
+    concepts: list[str] = Field(default_factory=list)
+    files: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+    createdAt: str
+    updatedAt: str
+
+
+class WikiUpdateJobRecord(BaseModel):
+    id: str
+    sourceIds: list[str] = Field(default_factory=list)
+    topic: WikiTopic | None = None
+    status: Literal["pending", "running", "applied", "failed"]
+    proposal: dict[str, Any] | None = None
+    attempts: int = 0
+    lastError: str | None = None
+    createdAt: str
+    updatedAt: str
+
+
 class AuditRecord(BaseModel):
     id: str
     action: Literal[
@@ -97,8 +151,18 @@ class AuditRecord(BaseModel):
         "llm_processing_failed",
         "index_done",
         "index_failed",
+        "knowledge_distill",
+        "wiki_update",
     ]
-    targetType: Literal["observation", "memory", "llm_processing_job", "index_job", "governance"]
+    targetType: Literal[
+        "observation",
+        "memory",
+        "llm_processing_job",
+        "index_job",
+        "governance",
+        "knowledge",
+        "wiki_page",
+    ]
     targetId: str
     source: str
     timestamp: str
@@ -164,8 +228,26 @@ class GovernanceExport(BaseModel):
     summaries: list[SummaryRecord] = Field(default_factory=list)
     memoryCandidates: list[MemoryCandidateRecord] = Field(default_factory=list)
     llmProcessingJobs: list[LLMProcessingJobRecord] = Field(default_factory=list)
+    knowledge: list[KnowledgeRecord] = Field(default_factory=list)
+    wikiPages: list[WikiPageRecord] = Field(default_factory=list)
+    wikiUpdateJobs: list[WikiUpdateJobRecord] = Field(default_factory=list)
     indexJobs: list["IndexJobRecord"] = Field(default_factory=list)
     audit: list[AuditRecord] = Field(default_factory=list)
+
+
+class WikiUpdateRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class WikiRebuildRequest(BaseModel):
+    topic: WikiTopic | None = None
+    all: bool = False
+
+
+class WikiUpdateResponse(BaseModel):
+    jobs: list[WikiUpdateJobRecord] = Field(default_factory=list)
+    pages: list[WikiPageRecord] = Field(default_factory=list)
+    knowledge: list[KnowledgeRecord] = Field(default_factory=list)
 
 
 class SearchDocument(BaseModel):

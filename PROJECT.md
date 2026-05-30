@@ -288,7 +288,16 @@ REST：
 
 ### LLM Wiki 实现
 
-LLM Wiki 是 RAG 之上的知识沉淀层。它不是把所有检索结果临时塞进 prompt，而是让 LLM 持续维护一组可读、可引用、可更新的个人知识页面。
+LLM Wiki 是 RAG 之上的长期知识沉淀思想。它不是把所有检索结果临时塞进 prompt，也不是只维护几篇静态页面；它的目标是让 LLM 持续把 agent 的观察、会话摘要、显式记忆和检索 evidence 提炼成可读、可引用、可演化、可检索的稳定知识层。
+
+长期目标分层：
+
+1. Raw layer：保存 observation、memory、summary 等原始 evidence。
+2. Distilled layer：提炼稳定事实、流程模式、经验教训和阶段性工作结晶。
+3. Synthesis layer：把 distilled knowledge 聚合成 Wiki 页面、反思 insight 和后续知识图谱。
+4. Retrieval layer：让 search、smart-search、context、Skill 和 Viewer 使用这些长期知识。
+
+第一版不一次性实现完整知识沉淀系统，而是先实现 Wiki 页面、Wiki update job 和最小 distilled knowledge，作为长期知识层的入口。当前最小 distilled knowledge 已覆盖 semantic、procedural、lesson 和 crystal 四类记录；后续 change 再补去重合并、reinforce/decay、crystal 稳定边界、reflect insights 和知识图谱。
 
 第一版 Wiki 页面结构：
 
@@ -304,12 +313,12 @@ LLM Wiki 是 RAG 之上的知识沉淀层。它不是把所有检索结果临时
 Wiki 更新流程：
 
 1. 新 observation、memory 或 summary 进入系统后，后台任务判断它是否影响已有 topic。
-2. LLM 根据新证据生成 Wiki update proposal，输出结构化 JSON。
+2. LLM 根据新证据生成 Wiki update proposal，输出可解析的结构化内容。
 3. 系统将 proposal 应用到对应 Wiki 页面，或创建新页面。
 4. 每次更新必须保留 `sourceIds` 和 audit 记录。
 5. Viewer 展示 Wiki 页面正文、来源引用和更新时间。
 
-第一版 Wiki 主题可以先固定为几类：
+第一版 Wiki 页面可以先固定为几类稳定入口：
 
 - 个人偏好
 - 项目概览
@@ -318,7 +327,29 @@ Wiki 更新流程：
 - 文件和模块说明
 - 工作流习惯
 
-这样 RAG 负责“找证据”，LLM Wiki 负责“沉淀稳定知识”。
+这些固定页面不是最终的完整 LLM Wiki，只是 P0 的聚合视图，避免早期让模型自由创建大量碎片页面。长期上，Wiki 页面应主要从 distilled layer 聚合生成，而不是每条 evidence 都直接改写页面。
+
+当前已落地的知识沉淀方向：
+
+- Semantic facts：稳定事实，例如项目采用的技术栈、核心约束和已确认决策。
+- Procedural patterns：做事流程，例如验收、归档、修复、搜索和调试习惯。
+- Lessons：经验教训，当前保留 confidence 和 sourceIds，后续补 reinforce/decay。
+- Crystals：把 evidence 压缩为阶段性摘要，当前为最小 digest，后续补按 session/change/source group 的稳定边界和 outcome/files/lessons 结构。
+- Reflect insights：定期从 facts、patterns、lessons、crystals 和 graph 中归纳更高层 insight。
+
+#### LLM Wiki 待优化
+
+当前 distilled knowledge 已能从 evidence 生成 semantic、procedural、lesson 和 crystal 记录，但第一版还缺少去重、合并和强化机制。多次 `wiki update` 或 `wiki rebuild --all` 处理同一批 `sourceIds` 时，可能生成内容相近的重复 records；不同 topic job 也可能对同一条 evidence 重复 distill。
+
+后续需要优化：
+
+- 以 `kind + normalized content` 或 `kind + sourceIds + content fingerprint` 做精确去重。
+- 对相似内容使用 embedding similarity 或 LLM 判断合并，而不是新增重复记录。
+- 为 lessons 增加 `reinforcements`、`lastReinforcedAt` 和 confidence strengthen/decay。
+- 为 crystals 增加按 session/change/source group 的稳定生成边界，避免每个 topic rebuild 都生成一条近似 crystal。
+- Wiki rebuild 应优先复用已有 distilled knowledge，只在发现缺失或过期时再 distill。
+
+这样 RAG 负责“找证据”，LLM Wiki 思想负责“把证据沉淀为稳定知识”，Wiki 页面负责“给 agent 和用户一个可读入口”。
 
 ### LLM Wiki 更新机制
 

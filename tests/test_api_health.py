@@ -45,6 +45,10 @@ def test_viewer_static_content_has_required_sections_and_no_unsupported_actions(
         "/agentmemory/sessions",
         "/agentmemory/memories",
         "/agentmemory/summaries",
+        "/agentmemory/wiki/pages",
+        "/agentmemory/wiki/jobs",
+        "/agentmemory/wiki/knowledge",
+        "data-tab=\"knowledge\"",
         "/agentmemory/memory-candidates",
         "/agentmemory/llm-processing-jobs",
         "/agentmemory/audit",
@@ -60,9 +64,12 @@ def test_viewer_static_content_has_required_sections_and_no_unsupported_actions(
         "agentmemory export",
         "agentmemory wiki",
         "agentmemory context",
-        "/agentmemory/wiki",
+        "/agentmemory/wiki/update",
+        "/agentmemory/wiki/rebuild",
         "/agentmemory/export",
         "/agentmemory/delete",
+        "edit wiki",
+        "delete wiki",
     ]
     for phrase in forbidden:
         assert phrase not in html

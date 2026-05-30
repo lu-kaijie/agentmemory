@@ -9,7 +9,15 @@ from fastapi.responses import HTMLResponse
 
 from agentmemory.config import Settings, get_settings
 from agentmemory.core import MemoryCoreService
-from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest, SearchRequest, SmartSearchRequest
+from agentmemory.core.models import (
+    ForgetRequest,
+    ObserveRequest,
+    RememberRequest,
+    SearchRequest,
+    SmartSearchRequest,
+    WikiRebuildRequest,
+    WikiUpdateRequest,
+)
 from agentmemory.core.search import MemorySearchService
 from agentmemory.core.service import MemoryNotFoundError
 from agentmemory.providers import create_provider_bundle
@@ -23,12 +31,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         stop_index_worker = asyncio.Event()
-        worker = asyncio.create_task(app.state.search_service.run_pending_worker(stop_index_worker))
+        stop_wiki_worker = asyncio.Event()
+        index_worker = asyncio.create_task(app.state.search_service.run_pending_worker(stop_index_worker))
+        wiki_worker = asyncio.create_task(app.state.memory_core.run_wiki_worker(stop_wiki_worker))
         try:
             yield
         finally:
             stop_index_worker.set()
-            await worker
+            stop_wiki_worker.set()
+            await index_worker
+            await wiki_worker
 
     app = FastAPI(title="AgentMemory", version=__version__, lifespan=lifespan)
     app.state.settings = resolved
@@ -127,6 +139,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def llm_processing_jobs() -> dict[str, object]:
         items = app.state.memory_core.list_llm_processing_jobs()
         return {"llmProcessingJobs": [item.model_dump() for item in items]}
+
+    @app.get("/agentmemory/wiki/pages")
+    def wiki_pages() -> dict[str, object]:
+        items = app.state.memory_core.list_wiki_pages()
+        return {"wikiPages": [item.model_dump() for item in items]}
+
+    @app.get("/agentmemory/wiki/jobs")
+    def wiki_jobs() -> dict[str, object]:
+        items = app.state.memory_core.list_wiki_jobs()
+        return {"wikiUpdateJobs": [item.model_dump() for item in items]}
+
+    @app.get("/agentmemory/wiki/knowledge")
+    def wiki_knowledge() -> dict[str, object]:
+        items = app.state.memory_core.list_knowledge()
+        return {"knowledge": [item.model_dump() for item in items]}
+
+    @app.post("/agentmemory/wiki/update")
+    def wiki_update(payload: WikiUpdateRequest | None = None) -> dict[str, object]:
+        return app.state.memory_core.process_wiki_updates(payload or WikiUpdateRequest()).model_dump()
+
+    @app.post("/agentmemory/wiki/rebuild")
+    def wiki_rebuild(payload: WikiRebuildRequest) -> dict[str, object]:
+        return app.state.memory_core.rebuild_wiki(payload).model_dump()
 
     @app.post("/agentmemory/search")
     def search(payload: SearchRequest) -> dict[str, object]:

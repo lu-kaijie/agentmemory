@@ -81,14 +81,32 @@ class OpenAICompatibleLLMProvider:
             "compress_context",
         )
 
-    def update_wiki(self, page_title: str, current_content: str, evidence: list[dict[str, Any]]) -> str:
+    def update_wiki(
+        self,
+        topic: str,
+        page_title: str,
+        current_content: str,
+        evidence: list[dict[str, Any]],
+    ) -> str:
         return self._complete(
             [
-                {"role": "system", "content": "Propose a wiki page update based on evidence."},
+                {
+                    "role": "system",
+                    "content": (
+                        "Update one AgentMemory Wiki page using only the provided evidence. "
+                        "Return exactly this XML-like format:\n"
+                        '<wiki_update topic="technical_decisions" title="技术决策" confidence="0.8">\n'
+                        "<content>Updated page content with concise durable knowledge.</content>\n"
+                        "</wiki_update>\n"
+                        "Use the requested topic. If evidence is insufficient, still return a short "
+                        "page update grounded in the evidence."
+                    ),
+                },
                 {
                     "role": "user",
                     "content": json.dumps(
                         {
+                            "topic": topic,
                             "pageTitle": page_title,
                             "currentContent": current_content,
                             "evidence": evidence,
@@ -98,6 +116,33 @@ class OpenAICompatibleLLMProvider:
                 },
             ],
             "update_wiki",
+        )
+
+    def distill_knowledge(self, evidence: list[dict[str, Any]]) -> str:
+        return self._complete(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Distill durable AgentMemory knowledge from evidence. "
+                        "Return only XML-like output in this format:\n"
+                        "<knowledge>\n"
+                        '<item kind="semantic" confidence="0.8">\n'
+                        "<content>Stable fact.</content>\n"
+                        "<concepts>comma,separated,concepts</concepts>\n"
+                        "<files>comma,separated,files</files>\n"
+                        "</item>\n"
+                        '<item kind="procedural" confidence="0.8"><content>Workflow or habit.</content></item>\n'
+                        '<item kind="lesson" confidence="0.8"><content>Lesson to remember.</content></item>\n'
+                        '<item kind="crystal" confidence="0.8"><content>Concise work digest.</content></item>\n'
+                        "</knowledge>\n"
+                        "Allowed kind values: semantic, procedural, lesson, crystal. "
+                        "Use only evidence-grounded knowledge. If nothing durable exists, output <knowledge/>."
+                    ),
+                },
+                {"role": "user", "content": json.dumps({"evidence": evidence}, ensure_ascii=False)},
+            ],
+            "distill_knowledge",
         )
 
     def _complete(self, messages: list[dict[str, str]], operation: str) -> str:

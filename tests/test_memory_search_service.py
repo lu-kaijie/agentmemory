@@ -5,6 +5,7 @@ from agentmemory.core.models import (
     RememberRequest,
     SearchRequest,
     SmartSearchRequest,
+    WikiRebuildRequest,
 )
 from agentmemory.core.search import MemorySearchService
 from agentmemory.core.service import MemoryCoreService
@@ -229,3 +230,35 @@ def test_forget_removes_memory_from_keyword_vector_and_hybrid_search(tmp_path):
     assert service.search(SearchRequest(query="Governance", mode="keyword")).results == []
     assert service.search(SearchRequest(query="searchable memory evidence", mode="vector")).results == []
     assert service.search(SearchRequest(query="Governance memory", mode="hybrid")).results == []
+
+
+def test_wiki_pages_are_indexed_and_searchable(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
+    service.remember(RememberRequest(content="Wiki search should find durable project knowledge.", language="en"))
+
+    service.rebuild_wiki(WikiRebuildRequest(topic="technical_decisions"))
+    service.search_service.process_pending()
+
+    keyword = service.search(SearchRequest(query="Stub wiki", mode="keyword", sourceTypes=["wikiPage"]))
+    vector = service.search(SearchRequest(query="durable project knowledge", mode="vector", sourceTypes=["wikiPage"]))
+    hybrid = service.search(SearchRequest(query="Stub wiki knowledge", mode="hybrid", sourceTypes=["wikiPage"]))
+
+    assert keyword.results
+    assert keyword.results[0].sourceType == "wikiPage"
+    assert vector.results
+    assert vector.results[0].sourceType == "wikiPage"
+    assert hybrid.results
+    assert {result.sourceType for result in hybrid.results} == {"wikiPage"}
+
+
+def test_distilled_knowledge_is_indexed_and_searchable(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
+    service.remember(RememberRequest(content="Wiki should distill durable knowledge records.", language="en"))
+
+    result = service.process_wiki_updates()
+    service.search_service.process_pending()
+
+    assert {item.kind for item in result.knowledge} == {"semantic", "procedural", "lesson", "crystal"}
+    search = service.search(SearchRequest(query="semantic knowledge", mode="hybrid", sourceTypes=["knowledge"]))
+    assert search.results
+    assert {item.sourceType for item in search.results} == {"knowledge"}

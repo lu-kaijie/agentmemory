@@ -60,8 +60,37 @@ class StubLLMProvider:
     def compress_context(self, items: list[dict[str, Any]], token_budget: int) -> str:
         return "stub context"
 
-    def update_wiki(self, page_title: str, current_content: str, evidence: list[dict[str, Any]]) -> str:
-        return "stub wiki update"
+    def update_wiki(
+        self,
+        topic: str,
+        page_title: str,
+        current_content: str,
+        evidence: list[dict[str, Any]],
+    ) -> str:
+        return (
+            f'<wiki_update topic="{topic}" title="{page_title or "Stub Wiki"}" confidence="0.9">'
+            "<content>Stub wiki update</content>"
+            "</wiki_update>"
+        )
+
+    def distill_knowledge(self, evidence: list[dict[str, Any]]) -> str:
+        return (
+            "<knowledge>"
+            '<item kind="semantic" confidence="0.9">'
+            "<content>Stub semantic knowledge</content>"
+            "<concepts>wiki,knowledge</concepts>"
+            "</item>"
+            '<item kind="procedural" confidence="0.8">'
+            "<content>Stub procedural pattern</content>"
+            "</item>"
+            '<item kind="lesson" confidence="0.7">'
+            "<content>Stub lesson</content>"
+            "</item>"
+            '<item kind="crystal" confidence="0.6">'
+            "<content>Stub crystal digest</content>"
+            "</item>"
+            "</knowledge>"
+        )
 
 
 class StubEmbeddingProvider:
