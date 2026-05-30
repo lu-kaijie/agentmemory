@@ -20,6 +20,10 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     app.state.search_service.llm = app.state.providers.llm
     client = TestClient(app)
 
+    session_start = client.post(
+        "/agentmemory/session/start",
+        json={"sessionId": "ses_api", "project": "agentmemory", "cwd": str(tmp_path)},
+    )
     observe = client.post(
         "/agentmemory/observe",
         json={
@@ -27,6 +31,14 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
             "content": "Implemented the REST memory core endpoints.",
             "type": "work-summary",
             "project": "agentmemory",
+            "language": "en",
+        },
+    )
+    session_end = client.post(
+        "/agentmemory/session/end",
+        json={
+            "sessionId": "ses_api",
+            "content": "Finished REST lifecycle acceptance.",
             "language": "en",
         },
     )
@@ -46,7 +58,7 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     summaries = client.get("/agentmemory/summaries")
     candidates = client.get("/agentmemory/memory-candidates")
     jobs = client.get("/agentmemory/llm-processing-jobs")
-    search = client.post("/agentmemory/search", json={"query": "REST", "mode": "keyword"})
+    search = client.post("/agentmemory/search", json={"query": "RAG indexing", "mode": "keyword", "matchMode": "any"})
     smart = client.post("/agentmemory/smart-search", json={"query": "REST memory", "mode": "hybrid"})
     context = client.post("/agentmemory/context", json={"query": "REST memory", "sourceTypes": ["memory"]})
     index_status = client.get("/agentmemory/index/status")
@@ -57,16 +69,28 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     wiki_update = client.post("/agentmemory/wiki/update", json={"limit": 1})
     wiki_pages = client.get("/agentmemory/wiki/pages")
 
+    assert session_start.status_code == 200
+    assert session_start.json()["session"]["status"] == "active"
     assert observe.status_code == 200
     assert observe.json()["sessionId"] == "ses_api"
     assert observe.json()["processingJob"]["status"] == "done"
     assert observe.json()["summary"]["content"] == "Stub summary"
     assert len(observe.json()["memoryCandidates"]) == 1
+    assert session_end.status_code == 200
+    assert session_end.json()["session"]["status"] == "ended"
+    assert session_end.json()["summary"]["kind"] == "session"
     assert remember.status_code == 200
     assert remember.json()["memoryId"].startswith("mem_")
     assert sessions.json()["sessions"][0]["observationCount"] == 1
+    assert sessions.json()["sessions"][0]["summaryId"] == session_end.json()["summary"]["id"]
     assert memories.json()["memories"][0]["content"] == "Memory core does not perform RAG indexing."
-    assert [item["action"] for item in audit.json()["audit"]] == ["observe", "llm_processing_done", "remember"]
+    assert [item["action"] for item in audit.json()["audit"]] == [
+        "session_start",
+        "observe",
+        "llm_processing_done",
+        "session_end",
+        "remember",
+    ]
     assert summaries.json()["summaries"][0]["content"] == "Stub summary"
     assert candidates.json()["memoryCandidates"][0]["status"] == "candidate"
     assert jobs.json()["llmProcessingJobs"][0]["status"] == "done"

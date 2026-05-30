@@ -37,6 +37,8 @@ def process_observation(
         summary = SummaryRecord(
             id=generate_id("sum"),
             observationId=observation.id,
+            sessionId=observation.sessionId,
+            kind="observation",
             content=summary_content,
             language=observation.language,
             createdAt=finished_at,

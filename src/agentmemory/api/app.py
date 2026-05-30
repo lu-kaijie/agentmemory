@@ -15,6 +15,8 @@ from agentmemory.core.models import (
     ObserveRequest,
     RememberRequest,
     SearchRequest,
+    SessionEndRequest,
+    SessionStartRequest,
     SmartSearchRequest,
     WikiRebuildRequest,
     WikiUpdateRequest,
@@ -99,6 +101,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def remember(payload: RememberRequest) -> dict[str, object]:
         result = app.state.memory_core.remember(payload)
         return result.model_dump()
+
+    @app.post("/agentmemory/session/start")
+    def session_start(payload: SessionStartRequest) -> dict[str, object]:
+        return app.state.memory_core.start_session(payload).model_dump()
+
+    @app.post("/agentmemory/session/end")
+    def session_end(payload: SessionEndRequest) -> dict[str, object]:
+        return app.state.memory_core.end_session(payload).model_dump()
 
     @app.get("/agentmemory/sessions")
     def sessions() -> dict[str, object]:

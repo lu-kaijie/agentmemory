@@ -25,7 +25,7 @@
 - [x] 4.1 实现 `mem::observe`，保存 observation 并维护 session 统计
 - [x] 4.2 实现 observation 后的 LLM 摘要、候选记忆提炼和 Wiki 更新任务
 - [x] 4.3 实现 `mem::remember`，保存用户显式 memory 并写入 audit
-- [ ] 4.4 实现 session start/end 和 session summary 更新
+- [x] 4.4 实现 session start/end 和 session summary 更新
 - [ ] 4.5 实现 LLM 或 embedding 失败时的 pending/failed 状态和重试入口
 - [x] 4.6 实现 `mem::wiki-update` 和 Wiki 页面来源引用维护
 - [ ] 4.7 实现 `wiki_update_job` 入队、合并、处理、失败记录和重试

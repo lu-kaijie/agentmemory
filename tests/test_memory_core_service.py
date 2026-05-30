@@ -1,9 +1,19 @@
 import pytest
 
-from agentmemory.core.models import ForgetRequest, ObserveRequest, RememberRequest, WikiRebuildRequest, WikiUpdateRequest
+from agentmemory.core.models import (
+    ForgetRequest,
+    ObserveRequest,
+    RememberRequest,
+    SearchRequest,
+    SessionEndRequest,
+    SessionStartRequest,
+    WikiRebuildRequest,
+    WikiUpdateRequest,
+)
+from agentmemory.core.search import MemorySearchService
 from agentmemory.core.service import MemoryCoreService, MemoryNotFoundError
 from agentmemory.state import StateKV
-from conftest import StubLLMProvider
+from conftest import StubEmbeddingProvider, StubLLMProvider, ai_settings
 
 
 def test_observe_creates_and_updates_session(tmp_path):
@@ -37,6 +47,8 @@ def test_observe_creates_and_updates_session(tmp_path):
     assert second.sessionId == "ses_test"
     assert len(sessions) == 1
     assert sessions[0].observationCount == 2
+    assert sessions[0].status == "active"
+    assert sessions[0].endedAt is None
     assert sessions[0].updatedAt >= sessions[0].startedAt
     assert [record.action for record in audit] == [
         "observe",
@@ -48,6 +60,69 @@ def test_observe_creates_and_updates_session(tmp_path):
     assert first.processingJob is not None
     assert first.processingJob.status == "done"
     assert len(first.memoryCandidates) == 1
+
+
+def test_session_start_end_creates_session_summary(tmp_path):
+    kv = StateKV(tmp_path / "memory.sqlite3")
+    search = MemorySearchService(
+        kv,
+        settings=ai_settings(tmp_path / "memory.sqlite3"),
+        embedding=StubEmbeddingProvider(),
+    )
+    service = MemoryCoreService(kv, llm=StubLLMProvider(summary="Session summary"), search=search)
+
+    started = service.start_session(
+        SessionStartRequest(sessionId="ses_lifecycle", project="agentmemory", cwd="/repo"),
+    )
+    service.observe(
+        ObserveRequest(
+            sessionId=started.sessionId,
+            content="Implemented lifecycle model changes.",
+            project="agentmemory",
+            cwd="/repo",
+            language="en",
+        ),
+    )
+    ended = service.end_session(
+        SessionEndRequest(
+            sessionId=started.sessionId,
+            content="Finished lifecycle implementation.",
+            language="en",
+        ),
+    )
+    search_result = service.search(
+        SearchRequest(query="Session summary", mode="keyword", sourceTypes=["summary"]),
+    )
+
+    assert started.session.observationCount == 0
+    assert ended.session.status == "ended"
+    assert ended.session.endedAt is not None
+    assert ended.summary is not None
+    assert ended.summary.kind == "session"
+    assert ended.summary.sessionId == "ses_lifecycle"
+    assert ended.session.summaryId == ended.summary.id
+    assert service.list_sessions()[0].summaryId == ended.summary.id
+    assert search_result.results
+    assert search_result.results[0].sourceId == ended.summary.id
+    assert f"summary:{ended.summary.id}" in {source for job in service.list_wiki_jobs() for source in job.sourceIds}
+    assert [record.action for record in service.list_audit()] == [
+        "session_start",
+        "observe",
+        "llm_processing_done",
+        "session_end",
+    ]
+
+
+def test_session_end_without_observations_marks_session_ended_without_summary(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
+
+    service.start_session(SessionStartRequest(sessionId="ses_empty"))
+    ended = service.end_session(SessionEndRequest(sessionId="ses_empty", language="en"))
+
+    assert ended.session.status == "ended"
+    assert ended.session.endedAt is not None
+    assert ended.summary is None
+    assert ended.session.summaryId is None
 
 
 def test_observe_saves_summary_candidates_and_job_without_auto_remember(tmp_path):

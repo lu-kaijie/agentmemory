@@ -37,6 +37,9 @@ class SessionRecord(BaseModel):
     startedAt: str
     updatedAt: str
     observationCount: int = 0
+    status: Literal["active", "ended"] = "active"
+    endedAt: str | None = None
+    summaryId: str | None = None
 
 
 class ObservationRecord(BaseModel):
@@ -75,7 +78,9 @@ class MemoryRecord(BaseModel):
 
 class SummaryRecord(BaseModel):
     id: str
-    observationId: str
+    observationId: str | None = None
+    sessionId: str | None = None
+    kind: Literal["observation", "session"] = "observation"
     content: str
     source: str = "llm"
     language: Language = "unknown"
@@ -157,11 +162,14 @@ class AuditRecord(BaseModel):
         "index_done",
         "index_failed",
         "knowledge_distill",
+        "session_end",
+        "session_start",
         "wiki_update",
     ]
     targetType: Literal[
         "observation",
         "memory",
+        "session",
         "llm_processing_job",
         "index_job",
         "governance",
@@ -193,6 +201,34 @@ class ObserveResponse(BaseModel):
     processingJob: LLMProcessingJobRecord | None = None
     summary: SummaryRecord | None = None
     memoryCandidates: list[MemoryCandidateRecord] = Field(default_factory=list)
+
+
+class SessionStartRequest(BaseModel):
+    sessionId: str | None = None
+    source: str = "cli"
+    project: str | None = None
+    cwd: str | None = None
+
+
+class SessionStartResponse(BaseModel):
+    sessionId: str
+    session: SessionRecord
+
+
+class SessionEndRequest(BaseModel):
+    sessionId: str = Field(min_length=1)
+    source: str = "cli"
+    content: str | None = None
+    language: Language = "unknown"
+    project: str | None = None
+    cwd: str | None = None
+
+
+class SessionEndResponse(BaseModel):
+    sessionId: str
+    session: SessionRecord
+    summary: SummaryRecord | None = None
+    error: str | None = None
 
 
 class RememberRequest(BaseModel):

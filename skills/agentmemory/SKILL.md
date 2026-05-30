@@ -7,6 +7,32 @@ description: AgentMemory 长期记忆使用协议。Use when coding agents need 
 
 优先使用 `agentmemory` CLI；CLI 不可用时再调用本地 REST API。需要程序化解析字段时，查询类命令加 `--json`。
 
+## 会话生命周期
+
+收到新任务请求后，先用用户请求、项目名、change 名或 agent 归纳的任务目标取一次可注入上下文：
+
+```bash
+agentmemory context "<当前任务或问题>" --limit 8 --token-budget 1200
+```
+
+如果需要显式跟踪本轮工作，可以启动或恢复 session：
+
+```bash
+agentmemory session start --project "<project>" --cwd "<cwd>" --json
+```
+
+工作过程中只在阶段性完成、关键决策或用户纠正方向后低频调用 `observe`。任务结束前优先结束 session，让 AgentMemory 基于本轮 observations 生成会话级 summary：
+
+```bash
+agentmemory session end \
+  --session-id "<session-id>" \
+  --content "<本轮任务结束总结>" \
+  --language zh \
+  --json
+```
+
+如果当前环境没有 `agentmemory session end`，用 `observe --type work-summary` 写入结束总结作为降级方案。
+
 ## 先查询
 
 在这些场景先查记忆：
@@ -15,7 +41,7 @@ description: AgentMemory 长期记忆使用协议。Use when coding agents need 
 - 用户提到“之前”、“上次”、“记得”、“按以前方式”。
 - 准备修改关键模块，但不确定过去约定。
 
-新任务开始、需要项目背景、历史决策或要把 Wiki/knowledge/memory 合并进 prompt 时，优先用 context：
+收到新任务请求、需要项目背景、历史决策或要把 Wiki/knowledge/memory 合并进 prompt 时，优先用 context：
 
 ```bash
 agentmemory context "<query>" --limit 8 --token-budget 1200
@@ -57,6 +83,8 @@ agentmemory smart-search "<question>" --mode hybrid --limit 5 --json
 
 REST 兜底：
 
+- `POST /agentmemory/session/start`
+- `POST /agentmemory/session/end`
 - `POST /agentmemory/context`
 - `POST /agentmemory/search`
 - `POST /agentmemory/smart-search`

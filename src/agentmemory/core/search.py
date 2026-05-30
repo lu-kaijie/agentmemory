@@ -105,12 +105,13 @@ def memory_document(memory: MemoryRecord) -> SearchDocument:
 
 
 def summary_document(summary: SummaryRecord, observation: ObservationRecord | None = None) -> SearchDocument:
+    session_id = summary.sessionId or (observation.sessionId if observation else None)
     return SearchDocument(
         id=f"doc_summary_{summary.id}",
         sourceType="summary",
         sourceId=summary.id,
-        sessionId=observation.sessionId if observation else None,
-        content=summary.content,
+        sessionId=session_id,
+        content=f"{summary.kind}\n\n{summary.content}",
         searchableText=_searchable_text(summary.content, observation.files if observation else [], observation.concepts if observation else []),
         language=summary.language,
         project=observation.project if observation else None,
@@ -674,7 +675,8 @@ class MemorySearchService:
         }
         for item in self.kv.list(KV.summaries):
             summary = SummaryRecord.model_validate(item)
-            documents.append(summary_document(summary, observations_by_id.get(summary.observationId)))
+            observation = observations_by_id.get(summary.observationId) if summary.observationId else None
+            documents.append(summary_document(summary, observation))
         for item in self.kv.list(KV.knowledge):
             documents.append(knowledge_document(KnowledgeRecord.model_validate(item)))
         for item in self.kv.list(KV.wiki_pages):

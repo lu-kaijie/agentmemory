@@ -522,6 +522,8 @@ CLI 是最通用的 agent 调用入口。P0 命令：
 
 - `agentmemory serve`
 - `agentmemory observe`
+- `agentmemory session start`
+- `agentmemory session end`
 - `agentmemory remember`
 - `agentmemory search`
 - `agentmemory smart-search`
@@ -571,6 +573,12 @@ agentmemory smart-search "<task or question>" --mode hybrid --json
 agentmemory context "<task or question>" --project "<project-path>"
 ```
 
+新任务开始时也可以显式创建或恢复 session：
+
+```bash
+agentmemory session start --project "<project-path>" --json
+```
+
 #### 3. 必须保存的场景
 
 agent 在以下场景 SHOULD 保存长期 memory：
@@ -609,6 +617,15 @@ agent 在以下场景 SHOULD 记录 observation：
 agentmemory observe \
   --type work-summary \
   --content "<what happened, what was learned, files touched, result>" \
+  --json
+```
+
+任务结束前 SHOULD 结束 session，让系统基于本轮 observations 生成会话级 summary：
+
+```bash
+agentmemory session end \
+  --session-id "<session-id>" \
+  --content "<final session summary note>" \
   --json
 ```
 
@@ -659,6 +676,8 @@ REST 路径统一以 `/agentmemory/*` 开头。当前实现重点是本地服务
 P0 端点：
 
 - `POST /agentmemory/observe`
+- `POST /agentmemory/session/start`
+- `POST /agentmemory/session/end`
 - `POST /agentmemory/remember`
 - `POST /agentmemory/search`
 - `POST /agentmemory/smart-search`

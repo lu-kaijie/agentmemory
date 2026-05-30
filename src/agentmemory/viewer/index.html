@@ -345,6 +345,9 @@
         item.project,
         item.language,
         item.sessionId,
+        item.status,
+        item.endedAt ? `ended:${item.endedAt}` : null,
+        item.summaryId ? `summary:${item.summaryId}` : null,
         item.confidence != null ? `confidence:${item.confidence}` : null,
         ...(item.matchSources || []),
       ].filter(Boolean).slice(0, 8);

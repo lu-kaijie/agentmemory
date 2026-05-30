@@ -21,7 +21,11 @@ from agentmemory.core.models import (
     ObservationRecord,
     RememberRequest,
     RememberResponse,
+    SessionEndRequest,
+    SessionEndResponse,
     SessionRecord,
+    SessionStartRequest,
+    SessionStartResponse,
     SummaryRecord,
     WIKI_TOPICS,
     WikiPageRecord,
@@ -67,6 +71,8 @@ class MemoryCoreService:
             session.cwd = request.cwd or session.cwd
             session.updatedAt = now
             session.observationCount += 1
+            session.status = "active"
+            session.endedAt = None
         else:
             session = SessionRecord(
                 id=session_id,
@@ -151,6 +157,108 @@ class MemoryCoreService:
             summary=summary,
             memoryCandidates=memory_candidates,
         )
+
+    def start_session(self, request: SessionStartRequest) -> SessionStartResponse:
+        now = utc_now_iso()
+        session_id = request.sessionId or generate_id("ses")
+        existing = self.kv.get(KV.sessions, session_id)
+        if existing:
+            session = SessionRecord.model_validate(existing)
+            session.project = request.project or session.project
+            session.cwd = request.cwd or session.cwd
+            session.updatedAt = now
+            session.status = "active"
+            session.endedAt = None
+        else:
+            session = SessionRecord(
+                id=session_id,
+                project=request.project,
+                cwd=request.cwd,
+                startedAt=now,
+                updatedAt=now,
+                observationCount=0,
+            )
+        self.kv.set(KV.sessions, session.id, session.model_dump())
+        self._record_audit(
+            AuditRecord(
+                id=generate_id("aud"),
+                action="session_start",
+                targetType="session",
+                targetId=session.id,
+                source=request.source,
+                timestamp=now,
+                details={"project": session.project, "cwd": session.cwd},
+            ),
+        )
+        return SessionStartResponse(sessionId=session.id, session=session)
+
+    def end_session(self, request: SessionEndRequest) -> SessionEndResponse:
+        now = utc_now_iso()
+        raw = self.kv.get(KV.sessions, request.sessionId)
+        session = (
+            SessionRecord.model_validate(raw)
+            if raw
+            else SessionRecord(
+                id=request.sessionId,
+                project=request.project,
+                cwd=request.cwd,
+                startedAt=now,
+                updatedAt=now,
+                observationCount=0,
+            )
+        )
+        session.project = request.project or session.project
+        session.cwd = request.cwd or session.cwd
+        session.status = "ended"
+        session.endedAt = now
+        session.updatedAt = now
+
+        summary = None
+        error = None
+        observations = [
+            ObservationRecord.model_validate(item)
+            for item in self.kv.list(KV.observations(session.id))
+        ]
+        if self.llm and observations:
+            try:
+                summary_text = self.llm.summarize(
+                    _session_summary_input(session, observations, request.content),
+                    "Summarize this coding-agent session into one concise session memory summary.",
+                )
+                summary = SummaryRecord(
+                    id=generate_id("sum"),
+                    observationId=None,
+                    sessionId=session.id,
+                    kind="session",
+                    content=summary_text,
+                    language=request.language,
+                    createdAt=now,
+                )
+                self.kv.set(KV.summaries, summary.id, summary.model_dump())
+                session.summaryId = summary.id
+                self._enqueue_wiki_job([f"summary:{summary.id}"])
+                if self.search_service:
+                    self.search_service.index_document(summary_document(summary))
+            except Exception as exc:
+                error = str(exc)
+
+        self.kv.set(KV.sessions, session.id, session.model_dump())
+        self._record_audit(
+            AuditRecord(
+                id=generate_id("aud"),
+                action="session_end",
+                targetType="session",
+                targetId=session.id,
+                source=request.source,
+                timestamp=now,
+                details={
+                    "summaryId": summary.id if summary else None,
+                    "observationCount": len(observations),
+                    "lastError": error,
+                },
+            ),
+        )
+        return SessionEndResponse(sessionId=session.id, session=session, summary=summary, error=error)
 
     def remember(self, request: RememberRequest) -> RememberResponse:
         now = utc_now_iso()
@@ -596,6 +704,24 @@ class MemoryCoreService:
 
 def _dedupe_strings(items: list[str]) -> list[str]:
     return list(dict.fromkeys(item for item in items if item))
+
+
+def _session_summary_input(
+    session: SessionRecord,
+    observations: list[ObservationRecord],
+    closing_note: str | None = None,
+) -> str:
+    lines = [
+        f"Session: {session.id}",
+        f"Project: {session.project or ''}",
+        f"CWD: {session.cwd or ''}",
+    ]
+    if closing_note:
+        lines.extend(["Closing note:", closing_note.strip()])
+    lines.append("Observations:")
+    for observation in sorted(observations, key=lambda item: item.createdAt):
+        lines.append(f"- [{observation.type}] {observation.content}")
+    return "\n".join(lines)
 
 
 def _normalize_knowledge_content(content: str) -> str:

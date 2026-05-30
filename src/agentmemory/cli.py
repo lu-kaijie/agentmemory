@@ -14,6 +14,8 @@ from agentmemory.core.models import (
     ObserveRequest,
     RememberRequest,
     SearchRequest,
+    SessionEndRequest,
+    SessionStartRequest,
     SmartSearchRequest,
     WikiRebuildRequest,
     WikiUpdateRequest,
@@ -25,8 +27,10 @@ from agentmemory.state import StateKV
 
 app = typer.Typer(help="AgentMemory local service")
 index_app = typer.Typer(help="Search index commands")
+session_app = typer.Typer(help="Session lifecycle commands")
 wiki_app = typer.Typer(help="Wiki commands")
 app.add_typer(index_app, name="index")
+app.add_typer(session_app, name="session")
 app.add_typer(wiki_app, name="wiki")
 
 
@@ -199,6 +203,49 @@ def remember(
         typer.echo(f"Memory saved: {result.memoryId}")
 
 
+@session_app.command("start")
+def session_start(
+    session_id: str | None = typer.Option(None, "--session-id", help="Session id."),
+    project: str | None = typer.Option(None, "--project", help="Project name or path."),
+    cwd: str | None = typer.Option(None, "--cwd", help="Working directory."),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Start or resume an AgentMemory session."""
+    result = _memory_core().start_session(
+        SessionStartRequest(sessionId=session_id, project=project, cwd=cwd),
+    )
+    if json_output:
+        _emit(result.model_dump(), True)
+    else:
+        typer.echo(f"Session started: {result.sessionId}")
+
+
+@session_app.command("end")
+def session_end(
+    session_id: str = typer.Option(..., "--session-id", help="Session id."),
+    content: str | None = typer.Option(None, "--content", "-c", help="Optional closing note."),
+    language: str = typer.Option("unknown", "--language", help="zh, en, mixed, or unknown."),
+    project: str | None = typer.Option(None, "--project", help="Project name or path."),
+    cwd: str | None = typer.Option(None, "--cwd", help="Working directory."),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """End an AgentMemory session and create a session summary."""
+    result = _memory_core().end_session(
+        SessionEndRequest(
+            sessionId=session_id,
+            content=content,
+            language=language,  # type: ignore[arg-type]
+            project=project,
+            cwd=cwd,
+        ),
+    )
+    if json_output:
+        _emit(result.model_dump(), True)
+    else:
+        summary = f" summary={result.summary.id}" if result.summary else ""
+        typer.echo(f"Session ended: {result.sessionId}{summary}")
+
+
 @app.command("sessions")
 def list_sessions(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
     """List sessions."""
@@ -207,7 +254,10 @@ def list_sessions(json_output: bool = typer.Option(False, "--json", help="Output
         _emit({"sessions": items}, True)
     else:
         for item in items:
-            typer.echo(f"{item['id']} observations={item['observationCount']} updated={item['updatedAt']}")
+            typer.echo(
+                f"{item['id']} status={item['status']} observations={item['observationCount']} "
+                f"updated={item['updatedAt']} summary={item.get('summaryId') or '-'}",
+            )
 
 
 @app.command("memories")

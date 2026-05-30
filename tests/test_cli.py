@@ -72,6 +72,20 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_module, "create_provider_bundle", lambda _settings: _StubProviderBundle())
     runner = CliRunner()
 
+    session_start = runner.invoke(
+        app,
+        [
+            "session",
+            "start",
+            "--session-id",
+            "ses_cli",
+            "--project",
+            "agentmemory",
+            "--cwd",
+            str(tmp_path),
+            "--json",
+        ],
+    )
     observe = runner.invoke(
         app,
         [
@@ -90,6 +104,20 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
             "src/agentmemory/cli.py,tests/test_cli.py",
             "--concepts",
             "cli,memory-core",
+        ],
+    )
+    session_end = runner.invoke(
+        app,
+        [
+            "session",
+            "end",
+            "--session-id",
+            "ses_cli",
+            "--content",
+            "Finished CLI lifecycle acceptance.",
+            "--language",
+            "en",
+            "--json",
         ],
     )
     remember = runner.invoke(
@@ -126,7 +154,9 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     wiki_knowledge = runner.invoke(app, ["wiki", "knowledge", "--json"])
     wiki_pages = runner.invoke(app, ["wiki", "pages", "--json"])
 
+    assert session_start.exit_code == 0
     assert observe.exit_code == 0
+    assert session_end.exit_code == 0
     assert "Observation saved:" in observe.output
     assert remember.exit_code == 0
     assert json.loads(remember.output)["memory"]["type"] == "decision"
@@ -164,11 +194,23 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     wiki_update_payload = json.loads(wiki_update.output)
     wiki_knowledge_payload = json.loads(wiki_knowledge.output)
     wiki_pages_payload = json.loads(wiki_pages.output)
+    session_start_payload = json.loads(session_start.output)
+    session_end_payload = json.loads(session_end.output)
 
     assert session_items[0]["id"] == "ses_cli"
+    assert session_start_payload["session"]["status"] == "active"
+    assert session_end_payload["session"]["status"] == "ended"
+    assert session_end_payload["summary"]["kind"] == "session"
+    assert session_items[0]["summaryId"] == session_end_payload["summary"]["id"]
     assert session_items[0]["observationCount"] == 1
     assert memory_items[0]["content"] == "CLI list commands support JSON output."
-    assert [item["action"] for item in audit_items] == ["observe", "llm_processing_done", "remember"]
+    assert [item["action"] for item in audit_items] == [
+        "session_start",
+        "observe",
+        "llm_processing_done",
+        "session_end",
+        "remember",
+    ]
     assert summary_items[0]["content"] == "Stub summary"
     assert candidate_items[0]["status"] == "candidate"
     assert job_items[0]["status"] == "done"
