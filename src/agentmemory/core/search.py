@@ -14,6 +14,8 @@ from agentmemory.state.schema import KV
 
 from .ids import generate_id, utc_now_iso
 from .models import (
+    ContextRequest,
+    ContextResponse,
     IndexJobRecord,
     IndexStatus,
     KnowledgeRecord,
@@ -29,6 +31,10 @@ from .models import (
     SummaryRecord,
     WikiPageRecord,
 )
+
+
+DEFAULT_CONTEXT_SOURCE_TYPES = ["knowledge", "wikiPage", "memory", "summary"]
+CONTEXT_SOURCE_PRIORITY = {"knowledge": 0, "wikiPage": 1, "memory": 2, "summary": 3, "observation": 4}
 
 
 def observation_document(observation: ObservationRecord) -> SearchDocument:
@@ -250,6 +256,49 @@ class MemorySearchService:
             results=results,
             evidence=evidence,
             context=context,
+        )
+
+    def context(self, request: ContextRequest) -> ContextResponse:
+        source_types = request.sourceTypes or DEFAULT_CONTEXT_SOURCE_TYPES
+        results = self._search_results(
+            query=request.query,
+            mode="hybrid",
+            limit=request.limit,
+            project=request.project,
+            language=request.language,
+            source_types=source_types,
+        )
+        if not results:
+            return ContextResponse(
+                query=request.query,
+                context="",
+                evidence=[],
+                wikiPages=[],
+                knowledge=[],
+                memories=[],
+                confidence=0.0,
+                compressed=False,
+            )
+
+        ordered = _context_order(results)
+        context = _pack_context(ordered)
+        compressed = False
+        if _over_budget(context, request.tokenBudget):
+            if self.llm:
+                context = self.llm.compress_context([item.model_dump() for item in ordered], request.tokenBudget)
+                compressed = True
+            else:
+                context = _truncate_context(context, request.tokenBudget)
+
+        return ContextResponse(
+            query=request.query,
+            context=context,
+            evidence=[_context_evidence(item) for item in ordered],
+            wikiPages=[item for item in ordered if item.sourceType == "wikiPage"],
+            knowledge=[item for item in ordered if item.sourceType == "knowledge"],
+            memories=[item for item in ordered if item.sourceType in ("memory", "summary", "observation")],
+            confidence=_context_confidence(ordered, compressed),
+            compressed=compressed,
         )
 
     def status(self) -> IndexStatus:
@@ -534,6 +583,63 @@ def _dedupe_documents(documents: Iterable[SearchDocument]) -> list[SearchDocumen
     for document in documents:
         deduped[document.id] = document
     return list(deduped.values())
+
+
+def _context_order(results: list[SearchResult]) -> list[SearchResult]:
+    return sorted(
+        results,
+        key=lambda item: (
+            CONTEXT_SOURCE_PRIORITY.get(item.sourceType, 99),
+            -item.score,
+            item.createdAt,
+            item.sourceId,
+        ),
+    )
+
+
+def _pack_context(results: list[SearchResult]) -> str:
+    lines = ["AgentMemory context:"]
+    for item in results:
+        lines.append(f"- [{item.sourceType}:{item.sourceId}] {item.content.strip()}")
+    return "\n".join(lines)
+
+
+def _context_evidence(result: SearchResult) -> dict[str, Any]:
+    return {
+        "sourceType": result.sourceType,
+        "sourceId": result.sourceId,
+        "documentId": result.documentId,
+        "content": result.content,
+        "score": result.score,
+        "matchSources": result.matchSources,
+    }
+
+
+def _over_budget(context: str, token_budget: int) -> bool:
+    return _approx_tokens(context) > token_budget
+
+
+def _truncate_context(context: str, token_budget: int) -> str:
+    max_chars = max(0, token_budget * 4)
+    if len(context) <= max_chars:
+        return context
+    suffix = "\n[truncated]"
+    return context[: max(0, max_chars - len(suffix))].rstrip() + suffix
+
+
+def _approx_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _context_confidence(results: list[SearchResult], compressed: bool) -> float:
+    if not results:
+        return 0.0
+    best_score = max(item.score for item in results)
+    source_diversity = len({item.sourceType for item in results})
+    match_bonus = 0.1 if any(len(item.matchSources) > 1 for item in results) else 0.0
+    compression_penalty = 0.05 if compressed else 0.0
+    confidence = min(0.95, 0.25 + min(best_score, 1.0) * 0.45 + min(source_diversity, 3) * 0.08 + match_bonus)
+    return round(max(0.0, confidence - compression_penalty), 3)
 
 
 def _escape_fts_query(query: str) -> str:

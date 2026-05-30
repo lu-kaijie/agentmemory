@@ -6,14 +6,14 @@
 
 #### Scenario: Export returns portable JSON
 
-- **WHEN** 用户调用 `/agentmemory/export` 或 `memory_export`
+- **WHEN** 用户调用 `/agentmemory/export` 或 `agentmemory export --json`
 - **THEN** 系统返回包含版本、sessions、observations、memories 和 audit 的 JSON
 
-### Requirement: Governance Delete
+### Requirement: Governance Forget
 
-系统 MUST 支持按 id 删除 memory 或 observation，并记录删除原因和审计条目。
+系统 MUST 支持按 id forget memory，并记录删除原因和审计条目。
 
-#### Scenario: Delete memory with reason
+#### Scenario: Forget memory with reason
 
 - **WHEN** 用户请求删除某条 memory 并提供原因
 - **THEN** 系统删除或标记该 memory，并写入包含原因的 audit 记录
@@ -29,11 +29,11 @@
 
 ### Requirement: Configuration Flags
 
-系统 SHALL 支持配置核心功能和高级功能开关。
+系统 SHALL 支持配置核心功能。
 
-P0 MUST 支持 `AGENTMEMORY_URL`、`AGENTMEMORY_SECRET`、`AGENTMEMORY_INJECT_CONTEXT`、`AGENTMEMORY_AUTO_COMPRESS`、`AGENTMEMORY_LLM_BASE_URL`、`AGENTMEMORY_LLM_MODEL`、`AGENTMEMORY_LLM_API_KEY`、`AGENTMEMORY_EMBEDDING_BASE_URL`、`AGENTMEMORY_EMBEDDING_MODEL`、`AGENTMEMORY_EMBEDDING_API_KEY`、`GRAPH_EXTRACTION_ENABLED` 和 `CONSOLIDATION_ENABLED`。
+P0 MUST 支持 `AGENTMEMORY_HOST`、`AGENTMEMORY_PORT`、`AGENTMEMORY_DB_PATH`、`AGENTMEMORY_VECTOR_DB_PATH`、`AGENTMEMORY_SECRET`、`AGENTMEMORY_LLM_BASE_URL`、`AGENTMEMORY_LLM_MODEL`、`AGENTMEMORY_LLM_API_KEY`、`AGENTMEMORY_EMBEDDING_BASE_URL`、`AGENTMEMORY_EMBEDDING_MODEL` 和 `AGENTMEMORY_EMBEDDING_API_KEY`。
 
-#### Scenario: Advanced feature disabled
+#### Scenario: Configuration redacts secrets
 
-- **WHEN** 图谱或 consolidation 配置关闭
-- **THEN** 系统跳过对应后台任务，并保持核心保存和搜索功能可用
+- **WHEN** 系统返回 health/config summary
+- **THEN** API key 和 secret 不以明文出现

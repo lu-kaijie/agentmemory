@@ -64,8 +64,8 @@ agent 是首要调用方，因此接口设计优先满足 Skill 可描述、CLI 
 
 - `agentmemory/functions/`：内部业务能力，例如 `mem::observe`、`mem::remember`、`mem::search`。
 - `agentmemory/state/`：状态 schema、状态访问、索引持久化和审计写入。
-- `agentmemory/api/`：REST adapter，只做认证、校验、白名单字段和调用内部能力。
-- `agentmemory/cli.py`：CLI adapter，默认调用 REST API，供 Skill 和 agent shell 工具使用。
+- `agentmemory/api/`：REST adapter，负责请求校验、响应结构和调用内部能力。
+- `agentmemory/cli.py`：CLI adapter，直接复用内部 service，供 Skill 和 agent shell 工具使用。
 - `skills/`：项目 Skill，指导 agent 保存、搜索、更新 Wiki 和注入上下文。
 - `agentmemory/viewer/`：轻量 Viewer 静态资源和健康检查页面。
 
@@ -82,7 +82,7 @@ FastAPI 提供稳定的 HTTP 服务能力、自动 OpenAPI 文档和良好的类
 
 ### 5. CLI 使用 Typer
 
-CLI 是第一版最重要的 agent 接入方式。使用 Typer 实现 `serve`、`observe`、`remember`、`recall`、`context`、`wiki`、`export`、`doctor`。默认输出人类可读文本，`--json` 输出结构化 JSON，方便 agent 解析。
+CLI 是第一版最重要的 agent 接入方式。使用 Typer 实现 `serve`、`observe`、`remember`、`search`、`smart-search`、`context`、`wiki`、`index`、`export`、`forget`、`doctor`。默认输出人类可读文本，`--json` 输出结构化 JSON，方便 agent 解析。
 
 ### 6. Web Viewer 使用 Vite + React + React Flow
 
@@ -167,13 +167,13 @@ LLM Wiki 更新采用 job 驱动：
 
 ### 10. 轻量知识图谱作为 Viewer 导航能力
 
-第一版提供轻量知识图谱 Viewer，但不把图谱作为搜索排序核心依赖。图谱数据由 LLM 从 memory、summary、Wiki 页面和重要 observation 中抽取，写入 `KV.graphNodes` 和 `KV.graphEdges`。
+第一版提供轻量关系图 Viewer，但不把图谱作为搜索排序核心依赖。当前关系图从已有 records 的 session、project、file、concept、memory、summary、Wiki 页面和 distilled knowledge 信息派生，不要求独立持久化 `KV.graphNodes` 或 `KV.graphEdges`。
 
-第一版节点类型包括 `project`、`session`、`file`、`concept`、`memory`、`wikiPage`。第一版边类型包括 `mentions`、`derived_from`、`related_to`、`belongs_to`。
+第一版节点类型包括 `project`、`session`、`file`、`concept`、`memory`、`summary`、`wikiPage`、`knowledge`。第一版边类型包括 `mentions`、`derived_from`、`related_to`、`belongs_to`。
 
-### 11. 认证采用可选 Bearer token
+### 11. 认证后续接入
 
-当 `AGENTMEMORY_SECRET` 存在时，所有非公开 REST 端点必须校验 `Authorization: Bearer <secret>`。本地开发可以不设置 secret，CLI 调用远程或本地 REST 时必须支持读取并转发 secret。
+P0 先保证本地 CLI、REST 和 Viewer 能稳定运行，health/config 会隐藏敏感值。Bearer token 认证作为后续服务化接入能力，不作为当前已实现前提。
 
 ### 12. 错误响应统一结构化
 

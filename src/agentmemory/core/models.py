@@ -307,6 +307,26 @@ class SmartSearchResponse(BaseModel):
     context: str = ""
 
 
+class ContextRequest(BaseModel):
+    query: str = Field(min_length=1)
+    tokenBudget: int = Field(default=1200, ge=100, le=20000)
+    limit: int = Field(default=10, ge=1, le=50)
+    project: str | None = None
+    language: Language | None = None
+    sourceTypes: list[SourceType] = Field(default_factory=list)
+
+
+class ContextResponse(BaseModel):
+    query: str
+    context: str
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    wikiPages: list[SearchResult] = Field(default_factory=list)
+    knowledge: list[SearchResult] = Field(default_factory=list)
+    memories: list[SearchResult] = Field(default_factory=list)
+    confidence: float = 0.0
+    compressed: bool = False
+
+
 class IndexJobRecord(BaseModel):
     id: str
     type: Literal["embedding_update", "fts_rebuild", "index_repair"]

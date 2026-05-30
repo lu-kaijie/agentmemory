@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from agentmemory.config import Settings, get_settings
 from agentmemory.core import MemoryCoreService
 from agentmemory.core.models import (
+    ContextRequest,
     ForgetRequest,
     ObserveRequest,
     RememberRequest,
@@ -170,6 +171,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/agentmemory/smart-search")
     def smart_search(payload: SmartSearchRequest) -> dict[str, object]:
         return app.state.memory_core.smart_search(payload).model_dump()
+
+    @app.post("/agentmemory/context")
+    def context(payload: ContextRequest) -> dict[str, object]:
+        return app.state.memory_core.context(payload).model_dump()
 
     @app.get("/agentmemory/index/status")
     def index_status() -> dict[str, object]:

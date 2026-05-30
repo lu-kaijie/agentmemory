@@ -115,6 +115,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     jobs = runner.invoke(app, ["llm-processing-jobs", "--json"])
     search = runner.invoke(app, ["search", "CLI", "--json"])
     smart = runner.invoke(app, ["smart-search", "CLI memory", "--json"])
+    context = runner.invoke(app, ["context", "CLI memory", "--source-types", "memory", "--json"])
     index_status = runner.invoke(app, ["index", "status", "--json"])
     index_repair = runner.invoke(app, ["index", "repair", "--json"])
     index_rebuild = runner.invoke(app, ["index", "rebuild", "--json"])
@@ -136,6 +137,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert jobs.exit_code == 0
     assert search.exit_code == 0
     assert smart.exit_code == 0
+    assert context.exit_code == 0
     assert index_status.exit_code == 0
     assert index_repair.exit_code == 0
     assert index_rebuild.exit_code == 0
@@ -153,6 +155,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     job_items = json.loads(jobs.output)["llmProcessingJobs"]
     search_items = json.loads(search.output)["results"]
     smart_payload = json.loads(smart.output)
+    context_payload = json.loads(context.output)
     index_payload = json.loads(index_status.output)
     export_payload = json.loads(exported.output)
     wiki_jobs_payload = json.loads(wiki_jobs.output)
@@ -170,6 +173,9 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert search_items
     assert smart_payload["answer"] == "stub explanation"
     assert smart_payload["evidence"]
+    assert context_payload["context"]
+    assert context_payload["evidence"][0]["sourceType"] == "memory"
+    assert context_payload["confidence"] > 0
     assert index_payload["documents"] >= 2
     assert export_payload["memories"][0]["content"] == "CLI list commands support JSON output."
     assert export_payload["audit"][-1]["action"] == "export"

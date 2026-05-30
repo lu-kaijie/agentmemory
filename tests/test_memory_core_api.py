@@ -48,6 +48,7 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     jobs = client.get("/agentmemory/llm-processing-jobs")
     search = client.post("/agentmemory/search", json={"query": "REST", "mode": "keyword"})
     smart = client.post("/agentmemory/smart-search", json={"query": "REST memory", "mode": "hybrid"})
+    context = client.post("/agentmemory/context", json={"query": "REST memory", "sourceTypes": ["memory"]})
     index_status = client.get("/agentmemory/index/status")
     index_repair = client.post("/agentmemory/index/repair")
     index_rebuild = client.post("/agentmemory/index/rebuild")
@@ -74,6 +75,10 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert smart.status_code == 200
     assert smart.json()["answer"] == "stub explanation"
     assert smart.json()["evidence"]
+    assert context.status_code == 200
+    assert context.json()["context"]
+    assert context.json()["evidence"][0]["sourceType"] == "memory"
+    assert context.json()["confidence"] > 0
     assert index_status.status_code == 200
     assert index_status.json()["documents"] >= 2
     assert index_repair.status_code == 200

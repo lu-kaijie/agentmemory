@@ -8,6 +8,7 @@ import uvicorn
 from agentmemory.api.app import create_app
 from agentmemory.config import get_settings
 from agentmemory.core.models import (
+    ContextRequest,
     ForgetRequest,
     ObserveRequest,
     RememberRequest,
@@ -319,6 +320,33 @@ def smart_search_command(
         _emit(result.model_dump(), True)
     else:
         typer.echo(result.answer)
+
+
+@app.command("context")
+def context_command(
+    query: str = typer.Argument(..., help="Context query."),
+    token_budget: int = typer.Option(1200, "--token-budget", min=100, max=20000),
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+    project: str | None = typer.Option(None, "--project"),
+    language: str | None = typer.Option(None, "--language"),
+    source_types: str | None = typer.Option(None, "--source-types", help="Comma-separated source types."),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Build prompt-ready memory context."""
+    result = _memory_core().context(
+        ContextRequest(
+            query=query,
+            tokenBudget=token_budget,
+            limit=limit,
+            project=project,
+            language=language,  # type: ignore[arg-type]
+            sourceTypes=_source_types(source_types),
+        ),
+    )
+    if json_output:
+        _emit(result.model_dump(), True)
+    else:
+        typer.echo(result.context)
 
 
 @index_app.command("status")

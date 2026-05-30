@@ -16,7 +16,7 @@
 ## 3. 状态层
 
 - [ ] 3.1 实现 `StateKV` 抽象和文件型 SQLite 持久化
-- [ ] 3.2 定义 `KV.sessions`、`KV.observations`、`KV.memories`、`KV.summaries`、`KV.wikiPages`、`KV.indexJobs`、`KV.wikiUpdateJobs`、`KV.relations`、`KV.graphNodes`、`KV.graphEdges` 和 `KV.audit`
+- [ ] 3.2 定义 `KV.sessions`、`KV.observations`、`KV.memories`、`KV.summaries`、`KV.knowledge`、`KV.wikiPages`、`KV.indexJobs`、`KV.wikiUpdateJobs` 和 `KV.audit`
 - [ ] 3.3 实现 `generateId`、`fingerprintId`、时间戳生成和基础去重
 - [ ] 3.4 实现 audit 写入工具，覆盖保存、删除、导入和导出
 
@@ -43,18 +43,18 @@
 ## 6. CLI、Skill 与 REST API
 
 - [ ] 6.1 实现 REST 服务和统一响应格式 `{ status_code, body, headers? }`
-- [ ] 6.2 实现 bearer token 认证和公开健康检查例外
-- [ ] 6.3 实现 `/agentmemory/observe`、`/agentmemory/remember`、`/agentmemory/search`、`/agentmemory/smart-search`、`/agentmemory/context` 和 `/agentmemory/wiki`
+- [ ] 6.2 实现配置脱敏、健康检查和 REST 字段校验
+- [ ] 6.3 实现 `/agentmemory/observe`、`/agentmemory/remember`、`/agentmemory/search`、`/agentmemory/smart-search`、`/agentmemory/context` 和 `/agentmemory/wiki/*`
 - [ ] 6.4 实现 `/agentmemory/export`、`/agentmemory/health` 和治理删除端点
-- [ ] 6.5 实现 CLI 命令：`serve`、`observe`、`remember`、`recall`、`context`、`wiki`、`index`、`export` 和 `doctor`
-- [ ] 6.6 创建 `skills/agentmemory/SKILL.md`，说明 recall、context、remember、observe、wiki 的触发场景，CLI 优先和 REST 兜底方式
+- [ ] 6.5 实现 CLI 命令：`serve`、`observe`、`remember`、`search`、`smart-search`、`context`、`wiki`、`index`、`export`、`forget` 和 `doctor`
+- [ ] 6.6 创建 `skills/agentmemory/SKILL.md`，说明 search、smart-search、context、remember、observe、wiki 的触发场景，CLI 优先和 REST 兜底方式
 - [ ] 6.7 为 REST adapter 和 CLI 添加字段白名单、结构化错误和 JSON 输出测试
 
 ## 7. Web Viewer
 
 - [ ] 7.1 实现 Web Viewer 的 memories、sessions、search、Wiki、health 页面
-- [ ] 7.2 实现简单关系图 API 和 Viewer 图谱展示
-- [ ] 7.3 实现 Viewer 与 REST API 的统一认证和错误展示
+- [ ] 7.2 实现 Viewer 派生关系图展示
+- [ ] 7.3 实现 Viewer 与 REST API 的错误展示
 
 ## 8. 治理、Viewer 与后台任务
 
@@ -67,7 +67,7 @@
 ## 9. 测试与验收
 
 - [ ] 9.1 添加状态层、核心函数、LLM provider fake、embedding provider fake、搜索和审计单元测试
-- [ ] 9.2 添加 REST API 集成测试，覆盖认证、保存、搜索、Wiki、导出和健康检查
-- [ ] 9.3 添加 CLI 测试，覆盖 remember、recall、context、wiki 和 JSON 输出
+- [ ] 9.2 添加 REST API 集成测试，覆盖保存、搜索、context、Wiki、导出、forget 和健康检查
+- [ ] 9.3 添加 CLI 测试，覆盖 remember、search、smart-search、context、wiki、forget 和 JSON 输出
 - [ ] 9.4 添加 Viewer 集成测试，覆盖搜索、Wiki、health 和关系图数据加载
 - [ ] 9.5 完成 P0 端到端验收：Skill 指导 agent 调用 CLI/API 写入 observation，LLM 生成摘要和 Wiki 更新，CLI/REST 能搜到，memory 能保存、导出、删除并产生审计

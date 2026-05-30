@@ -15,7 +15,15 @@ description: AgentMemory 长期记忆使用协议。Use when coding agents need 
 - 用户提到“之前”、“上次”、“记得”、“按以前方式”。
 - 准备修改关键模块，但不确定过去约定。
 
-默认先用：
+新任务开始、需要项目背景、历史决策或要把 Wiki/knowledge/memory 合并进 prompt 时，优先用 context：
+
+```bash
+agentmemory context "<query>" --limit 8 --token-budget 1200 --json
+```
+
+使用 context response 时，优先读取 `context` 字段；依赖其中结论前，同时看 `confidence` 和 `evidence` 里的 source ids。低置信或无 evidence 的 context 不能当作确定事实。
+
+需要原始检索列表时用：
 
 ```bash
 agentmemory search "<query>" --mode hybrid --limit 5 --json
@@ -35,6 +43,7 @@ agentmemory smart-search "<question>" --mode hybrid --limit 5 --json
 
 REST 兜底：
 
+- `POST /agentmemory/context`
 - `POST /agentmemory/search`
 - `POST /agentmemory/smart-search`
 
@@ -73,6 +82,50 @@ REST 兜底：
 - `POST /agentmemory/observe`
 - `POST /agentmemory/remember`
 
+## Wiki 知识库
+
+Wiki 用于浏览和维护由 evidence 沉淀出的长期知识页面。查看页面、任务和 distilled knowledge：
+
+```bash
+agentmemory wiki pages --json
+agentmemory wiki knowledge --json
+agentmemory wiki jobs --json
+```
+
+处理 pending Wiki 更新或从现有 evidence 重建：
+
+```bash
+agentmemory wiki update --json
+agentmemory wiki rebuild --all --json
+```
+
+REST 兜底：
+
+- `GET /agentmemory/wiki/pages`
+- `GET /agentmemory/wiki/knowledge`
+- `GET /agentmemory/wiki/jobs`
+- `POST /agentmemory/wiki/update`
+- `POST /agentmemory/wiki/rebuild`
+
+## 治理操作
+
+需要导出治理数据时：
+
+```bash
+agentmemory export --json
+```
+
+用户明确要求删除某条长期记忆时：
+
+```bash
+agentmemory forget --memory-id "<memory-id>" --reason "<reason>" --json
+```
+
+REST 兜底：
+
+- `GET /agentmemory/export`
+- `POST /agentmemory/forget`
+
 ## 低频规则
 
 不要在每次文件读取、每次编辑、每次命令执行或每次测试后调用 `observe`。把同一阶段的信息合并成一条记录。
@@ -106,4 +159,4 @@ agentmemory index rebuild --json
 - 未验证猜测、临时想法、明显过期的信息。
 - 没有证据来源的 LLM 编造结论。
 
-当前版本不要使用未实现的自动采集、上下文注入、知识库页面、导出或删除操作。
+当前版本不要使用未实现的自动采集、Hook 或 MCP 接入。

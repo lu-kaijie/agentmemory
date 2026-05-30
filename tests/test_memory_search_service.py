@@ -1,5 +1,6 @@
 from agentmemory.config import Settings
 from agentmemory.core.models import (
+    ContextRequest,
     ForgetRequest,
     ObserveRequest,
     RememberRequest,
@@ -262,3 +263,85 @@ def test_distilled_knowledge_is_indexed_and_searchable(tmp_path):
     search = service.search(SearchRequest(query="semantic knowledge", mode="hybrid", sourceTypes=["knowledge"]))
     assert search.results
     assert {item.sourceType for item in search.results} == {"knowledge"}
+
+
+def test_context_uses_default_durable_sources_and_groups_results(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
+    service.observe(ObserveRequest(sessionId="ses_context", content="Observation should not be default context.", language="en"))
+    service.remember(RememberRequest(content="Memory context should include durable project decisions.", language="en"))
+    service.process_wiki_updates()
+    service.search_service.process_pending()
+
+    result = service.context(ContextRequest(query="memory context durable project", limit=10))
+
+    assert result.context.startswith("AgentMemory context:")
+    assert result.evidence
+    assert result.confidence > 0
+    assert result.compressed is False
+    assert result.knowledge
+    assert result.wikiPages
+    assert result.memories
+    assert "observation" not in {item["sourceType"] for item in result.evidence}
+    first_source = result.evidence[0]["sourceType"]
+    assert first_source in {"knowledge", "wikiPage"}
+    assert f"[{first_source}:{result.evidence[0]['sourceId']}]" in result.context
+
+
+def test_context_honors_source_type_project_and_language_filters(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
+    service.observe(
+        ObserveRequest(
+            sessionId="ses_context_filter",
+            content="Filtered observation context evidence.",
+            language="en",
+            project="agentmemory",
+        ),
+    )
+
+    result = service.context(
+        ContextRequest(
+            query="Filtered observation",
+            sourceTypes=["observation"],
+            project="agentmemory",
+            language="en",
+        ),
+    )
+    wrong_project = service.context(
+        ContextRequest(query="Filtered observation", sourceTypes=["observation"], project="other"),
+    )
+
+    assert result.evidence
+    assert {item["sourceType"] for item in result.evidence} == {"observation"}
+    assert result.memories[0].sourceType == "observation"
+    assert wrong_project.context == ""
+    assert wrong_project.confidence == 0
+
+
+def test_context_compresses_or_truncates_when_over_budget(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
+    service.remember(RememberRequest(content="Memory " + ("context " * 80), language="en"))
+
+    compressed = service.context(ContextRequest(query="Memory context", tokenBudget=100))
+    service.search_service.llm = None
+    truncated = service.context(ContextRequest(query="Memory context", tokenBudget=100))
+
+    assert compressed.compressed is True
+    assert compressed.context == "stub context"
+    assert compressed.evidence
+    assert truncated.compressed is False
+    assert "[truncated]" in truncated.context
+    assert truncated.evidence
+
+
+def test_context_no_evidence_response(tmp_path):
+    service = _service(tmp_path)
+
+    result = service.context(ContextRequest(query="missing", sourceTypes=["memory"]))
+
+    assert result.context == ""
+    assert result.evidence == []
+    assert result.wikiPages == []
+    assert result.knowledge == []
+    assert result.memories == []
+    assert result.confidence == 0
+    assert result.compressed is False

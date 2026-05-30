@@ -5,6 +5,7 @@ import asyncio
 from agentmemory.core.ids import generate_id, utc_now_iso
 from agentmemory.core.models import (
     AuditRecord,
+    ContextRequest,
     ForgetRequest,
     ForgetResponse,
     GovernanceExport,
@@ -366,6 +367,11 @@ class MemoryCoreService:
         if not self.search_service:
             raise RuntimeError("search service is not configured")
         return self.search_service.smart_search(request)
+
+    def context(self, request: ContextRequest):
+        if not self.search_service:
+            raise RuntimeError("search service is not configured")
+        return self.search_service.context(request)
 
     def index_status(self):
         if not self.search_service:
