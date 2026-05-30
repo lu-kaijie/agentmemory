@@ -2,11 +2,14 @@ import pytest
 
 from agentmemory.core.models import (
     ForgetRequest,
+    ContextRequest,
+    MaintenanceRunRequest,
     ObserveRequest,
     RememberRequest,
     SearchRequest,
     SessionEndRequest,
     SessionStartRequest,
+    GovernanceImportRequest,
     WikiRebuildRequest,
     WikiUpdateRequest,
 )
@@ -238,6 +241,7 @@ def test_export_data_writes_audit_and_includes_governance_records(tmp_path):
     exported = service.export_data(source="test")
 
     assert exported.version
+    assert exported.schemaVersion == 1
     assert exported.exportedAt
     assert len(exported.sessions) == 1
     assert len(exported.observations) == 1
@@ -248,6 +252,43 @@ def test_export_data_writes_audit_and_includes_governance_records(tmp_path):
     assert exported.audit[-1].action == "export"
     assert exported.audit[-1].targetType == "governance"
     assert exported.audit[-1].details["memories"] == 1
+
+
+def test_import_data_restores_export_into_fresh_searchable_store(tmp_path):
+    source = MemoryCoreService(StateKV(tmp_path / "source.sqlite3"), llm=StubLLMProvider())
+    source.observe(ObserveRequest(sessionId="ses_import", content="Import restores observations.", language="en"))
+    source.remember(RememberRequest(content="Import restores searchable memories.", language="en", concepts=["import"]))
+    source.process_wiki_updates(WikiUpdateRequest(limit=1))
+    exported = source.export_data(source="test").model_dump()
+
+    kv = StateKV(tmp_path / "target.sqlite3")
+    target = MemoryCoreService(
+        kv,
+        llm=StubLLMProvider(),
+        search=MemorySearchService(kv, settings=ai_settings(tmp_path / "target.sqlite3"), embedding=StubEmbeddingProvider()),
+    )
+    result = target.import_data(GovernanceImportRequest(payload=exported, source="test"))
+    duplicate = target.import_data(GovernanceImportRequest(payload=exported, source="test"))
+    search = target.search(SearchRequest(query="searchable memories", mode="keyword", sourceTypes=["memory"], matchMode="any"))
+    context = target.context(ContextRequest(query="Stub wiki update", sourceTypes=["wikiPage"], matchMode="any"))
+
+    assert result.schemaVersion == 1
+    assert result.auditId.startswith("aud_")
+    assert result.imported["memories"] == 1
+    assert result.imported["observations"] == 1
+    assert result.imported["wikiPages"] == 1
+    assert duplicate.skipped["memories"] == 1
+    assert duplicate.skipped["observations"] == 1
+    assert target.list_audit()[-1].action == "import"
+    assert search.results
+    assert context.context
+
+
+def test_import_rejects_unsupported_schema_version(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"))
+
+    with pytest.raises(ValueError, match="unsupported governance schemaVersion"):
+        service.import_data(GovernanceImportRequest(payload={"schemaVersion": 999}, source="test"))
 
 
 def test_forget_deletes_memory_and_writes_audit(tmp_path):
@@ -311,6 +352,39 @@ def test_wiki_processing_failure_preserves_source_data(tmp_path):
     assert service.list_memories()[0].id == remembered.memoryId
     assert service.list_knowledge()
     assert service.list_wiki_pages() == []
+
+
+def test_maintenance_retries_failed_wiki_jobs(tmp_path):
+    llm = StubLLMProvider()
+    llm.update_wiki = lambda *args, **kwargs: "invalid output"  # type: ignore[method-assign]
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=llm)
+    service.remember(RememberRequest(content="Maintenance should retry Wiki jobs.", language="en"))
+    failed = service.process_wiki_updates()
+    assert failed.jobs[0].status == "failed"
+
+    service.llm = StubLLMProvider()
+    result = service.run_maintenance(MaintenanceRunRequest(limit=5))
+
+    assert result.errors == []
+    assert result.wiki["retried"] == 1
+    assert result.wiki["jobs"][0]["status"] == "applied"
+    assert service.list_wiki_pages()[0].content == "Stub wiki update"
+
+
+def test_maintenance_retries_failed_llm_processing(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider(fail=True))
+    observed = service.observe(ObserveRequest(content="Retry failed LLM processing.", language="en"))
+    assert observed.processingJob is not None
+    assert observed.processingJob.status == "failed"
+
+    service.llm = StubLLMProvider()
+    result = service.run_maintenance(MaintenanceRunRequest(limit=5))
+    jobs = result.llm["jobs"]
+
+    assert jobs[0]["status"] == "done"
+    assert jobs[0]["attempts"] == 1
+    assert service.list_summaries()[0].content == "Stub summary"
+    assert service.list_memory_candidates()
 
 
 def test_wiki_rebuild_all_creates_jobs_and_pages(tmp_path):

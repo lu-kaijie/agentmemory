@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import typer
 import uvicorn
@@ -11,6 +12,8 @@ from agentmemory.core.models import (
     ContextResponse,
     ContextRequest,
     ForgetRequest,
+    GovernanceImportRequest,
+    MaintenanceRunRequest,
     ObserveRequest,
     RememberRequest,
     SearchRequest,
@@ -29,9 +32,11 @@ app = typer.Typer(help="AgentMemory local service")
 index_app = typer.Typer(help="Search index commands")
 session_app = typer.Typer(help="Session lifecycle commands")
 wiki_app = typer.Typer(help="Wiki commands")
+maintenance_app = typer.Typer(help="Maintenance commands")
 app.add_typer(index_app, name="index")
 app.add_typer(session_app, name="session")
 app.add_typer(wiki_app, name="wiki")
+app.add_typer(maintenance_app, name="maintenance")
 
 
 @app.command()
@@ -145,6 +150,26 @@ def _context_prompt_output(result: ContextResponse) -> str:
             "</agentmemory-context>",
         ],
     )
+
+
+@maintenance_app.command("run")
+def maintenance_run(
+    limit: int = typer.Option(25, "--limit", min=1, max=500, help="Maximum jobs per maintenance category."),
+    retry_failed: bool = typer.Option(True, "--retry-failed/--no-retry-failed", help="Retry failed jobs."),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Run index, LLM and Wiki maintenance once."""
+    result = _memory_core().run_maintenance(MaintenanceRunRequest(limit=limit, retryFailed=retry_failed)).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        index_jobs = len(result.get("index", {}).get("jobs", []))
+        wiki_jobs = len(result.get("wiki", {}).get("jobs", []))
+        llm_jobs = len(result.get("llm", {}).get("jobs", []))
+        typer.echo(
+            f"Maintenance complete: indexJobs={index_jobs} wikiJobs={wiki_jobs} "
+            f"llmJobs={llm_jobs} errors={len(result['errors'])}",
+        )
 
 
 @app.command()
@@ -292,6 +317,23 @@ def export_command(json_output: bool = typer.Option(False, "--json", help="Outpu
         typer.echo(
             f"Exported sessions={len(result['sessions'])} observations={len(result['observations'])} "
             f"memories={len(result['memories'])} audit={len(result['audit'])}",
+        )
+
+
+@app.command("import")
+def import_command(
+    file: Path = typer.Option(..., "--file", exists=True, dir_okay=False, readable=True, help="Export JSON file to import."),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Import governance data from an AgentMemory export JSON file."""
+    payload = json.loads(file.read_text(encoding="utf-8"))
+    result = _memory_core().import_data(GovernanceImportRequest(payload=payload)).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(
+            f"Imported audit={result['auditId']} imported={sum(result['imported'].values())} "
+            f"skipped={sum(result['skipped'].values())} errors={len(result['errors'])}",
         )
 
 

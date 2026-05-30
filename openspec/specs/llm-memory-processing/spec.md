@@ -3,9 +3,7 @@
 ## Purpose
 
 定义 observation 写入后的 LLM summary、candidate memory 提炼、processing job 状态和审计能力。
-
 ## Requirements
-
 ### Requirement: Observation LLM Summary
 
 系统 SHALL 在 observation 保存后使用 LLM 生成 summary。
@@ -82,3 +80,20 @@ Skill 或调用文档 MUST NOT 要求 agent 在每次工具调用、每次文件
 
 - **WHEN** agent 每次工具调用后都有原始事件
 - **THEN** Skill 不得要求每个事件都同步调用 `observe` 并触发 LLM processing
+
+### Requirement: LLM Processing Retry
+
+系统 SHALL 支持重试 failed LLM processing jobs。
+
+Retry MUST 基于原始 observation 重新执行 summary 和 candidate memory extraction。成功后 MUST 更新同一个 job 的 status、summaryId、candidateIds、lastError 和 finishedAt，并写入 summary、candidate memories、search index、Wiki update job 和 audit。失败时 MUST 保留 failed 状态并更新 attempts、lastError 和 finishedAt。
+
+#### Scenario: Retry failed LLM job succeeds
+
+- **WHEN** maintenance 或显式重试处理 failed LLM processing job 且 LLM 调用成功
+- **THEN** 系统将该 job 标记为 done 并保存派生数据
+
+#### Scenario: Retry failed LLM job fails again
+
+- **WHEN** maintenance 或显式重试处理 failed LLM processing job 且 LLM 调用失败
+- **THEN** 系统保留 failed 状态并记录最新 lastError
+

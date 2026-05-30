@@ -106,6 +106,7 @@ class LLMProcessingJobRecord(BaseModel):
     status: Literal["running", "done", "failed"]
     summaryId: str | None = None
     candidateIds: list[str] = Field(default_factory=list)
+    attempts: int = 0
     lastError: str | None = None
     startedAt: str
     finishedAt: str | None = None
@@ -157,6 +158,7 @@ class AuditRecord(BaseModel):
         "remember",
         "export",
         "forget",
+        "import",
         "llm_processing_done",
         "llm_processing_failed",
         "index_done",
@@ -262,6 +264,7 @@ class ForgetResponse(BaseModel):
 
 class GovernanceExport(BaseModel):
     version: str
+    schemaVersion: int = 1
     exportedAt: str
     sessions: list[SessionRecord] = Field(default_factory=list)
     observations: list[ObservationRecord] = Field(default_factory=list)
@@ -274,6 +277,19 @@ class GovernanceExport(BaseModel):
     wikiUpdateJobs: list[WikiUpdateJobRecord] = Field(default_factory=list)
     indexJobs: list["IndexJobRecord"] = Field(default_factory=list)
     audit: list[AuditRecord] = Field(default_factory=list)
+
+
+class GovernanceImportRequest(BaseModel):
+    payload: dict[str, Any]
+    source: str = "cli"
+
+
+class GovernanceImportResponse(BaseModel):
+    schemaVersion: int
+    imported: dict[str, int] = Field(default_factory=dict)
+    skipped: dict[str, int] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+    auditId: str
 
 
 class WikiUpdateRequest(BaseModel):
@@ -391,3 +407,16 @@ class IndexStatus(BaseModel):
     fts5: dict[str, Any]
     lancedb: dict[str, Any]
     embedding: dict[str, Any]
+
+
+class MaintenanceRunRequest(BaseModel):
+    limit: int = Field(default=25, ge=1, le=500)
+    retryFailed: bool = True
+
+
+class MaintenanceRunResponse(BaseModel):
+    index: dict[str, Any] = Field(default_factory=dict)
+    wiki: dict[str, Any] = Field(default_factory=dict)
+    llm: dict[str, Any] = Field(default_factory=dict)
+    pageCompression: dict[str, Any] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)

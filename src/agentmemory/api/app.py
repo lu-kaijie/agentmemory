@@ -12,6 +12,8 @@ from agentmemory.core import MemoryCoreService
 from agentmemory.core.models import (
     ContextRequest,
     ForgetRequest,
+    GovernanceImportRequest,
+    MaintenanceRunRequest,
     ObserveRequest,
     RememberRequest,
     SearchRequest,
@@ -31,19 +33,37 @@ from agentmemory.version import __version__
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or get_settings()
 
+    def respond(payload: dict[str, object], envelope: bool = False) -> dict[str, object]:
+        if envelope or resolved.rest_envelope:
+            return {"status_code": 200, "body": payload, "headers": {}}
+        return payload
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        stop_index_worker = asyncio.Event()
-        stop_wiki_worker = asyncio.Event()
-        index_worker = asyncio.create_task(app.state.search_service.run_pending_worker(stop_index_worker))
-        wiki_worker = asyncio.create_task(app.state.memory_core.run_wiki_worker(stop_wiki_worker))
+        if resolved.maintenance_enabled:
+            stop_worker = asyncio.Event()
+            worker = asyncio.create_task(
+                app.state.memory_core.run_maintenance_worker(
+                    stop_worker,
+                    interval_seconds=resolved.maintenance_interval_seconds,
+                    limit=resolved.maintenance_limit,
+                ),
+            )
+            workers = [(stop_worker, worker)]
+        else:
+            stop_index_worker = asyncio.Event()
+            stop_wiki_worker = asyncio.Event()
+            workers = [
+                (stop_index_worker, asyncio.create_task(app.state.search_service.run_pending_worker(stop_index_worker))),
+                (stop_wiki_worker, asyncio.create_task(app.state.memory_core.run_wiki_worker(stop_wiki_worker))),
+            ]
         try:
             yield
         finally:
-            stop_index_worker.set()
-            stop_wiki_worker.set()
-            await index_worker
-            await wiki_worker
+            for stop_event, _worker in workers:
+                stop_event.set()
+            for _stop_event, worker in workers:
+                await worker
 
     app = FastAPI(title="AgentMemory", version=__version__, lifespan=lifespan)
     app.state.settings = resolved
@@ -71,7 +91,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "alive"}
 
     @app.get("/agentmemory/health")
-    def health() -> dict[str, object]:
+    def health(envelope: bool = False) -> dict[str, object]:
         database_ok = False
         error = None
         try:
@@ -90,7 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         if error:
             body["database"]["error"] = error  # type: ignore[index]
-        return body
+        return respond(body, envelope)
 
     @app.post("/agentmemory/observe")
     def observe(payload: ObserveRequest) -> dict[str, object]:
@@ -128,6 +148,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/agentmemory/export")
     def export_data() -> dict[str, object]:
         return app.state.memory_core.export_data(source="rest").model_dump()
+
+    @app.post("/agentmemory/import")
+    def import_data(payload: dict[str, object]) -> dict[str, object]:
+        try:
+            return app.state.memory_core.import_data(GovernanceImportRequest(payload=payload, source="rest")).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": "invalid_import", "message": str(exc)}) from exc
 
     @app.post("/agentmemory/forget")
     def forget(payload: ForgetRequest) -> dict[str, object]:
@@ -173,6 +200,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/agentmemory/wiki/rebuild")
     def wiki_rebuild(payload: WikiRebuildRequest) -> dict[str, object]:
         return app.state.memory_core.rebuild_wiki(payload).model_dump()
+
+    @app.post("/agentmemory/maintenance/run")
+    def maintenance_run(payload: MaintenanceRunRequest | None = None, envelope: bool = False) -> dict[str, object]:
+        result = app.state.memory_core.run_maintenance(payload or MaintenanceRunRequest()).model_dump()
+        return respond(result, envelope)
 
     @app.post("/agentmemory/search")
     def search(payload: SearchRequest) -> dict[str, object]:

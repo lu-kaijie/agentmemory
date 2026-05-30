@@ -1,3 +1,5 @@
+import copy
+
 from fastapi.testclient import TestClient
 
 from agentmemory.api import create_app
@@ -64,10 +66,12 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     index_status = client.get("/agentmemory/index/status")
     index_repair = client.post("/agentmemory/index/repair")
     index_rebuild = client.post("/agentmemory/index/rebuild")
+    health_envelope = client.get("/agentmemory/health?envelope=true")
     exported = client.get("/agentmemory/export")
     wiki_jobs = client.get("/agentmemory/wiki/jobs")
     wiki_update = client.post("/agentmemory/wiki/update", json={"limit": 1})
     wiki_pages = client.get("/agentmemory/wiki/pages")
+    maintenance = client.post("/agentmemory/maintenance/run", json={"limit": 5})
 
     assert session_start.status_code == 200
     assert session_start.json()["session"]["status"] == "active"
@@ -107,6 +111,9 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert index_status.json()["documents"] >= 2
     assert index_repair.status_code == 200
     assert index_rebuild.status_code == 200
+    assert health_envelope.status_code == 200
+    assert health_envelope.json()["status_code"] == 200
+    assert "maintenance" in health_envelope.json()["body"]["config"]
     assert exported.status_code == 200
     assert exported.json()["memories"][0]["content"] == "Memory core does not perform RAG indexing."
     assert exported.json()["audit"][-1]["action"] == "export"
@@ -116,6 +123,8 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert wiki_update.json()["jobs"][0]["status"] == "applied"
     assert wiki_pages.status_code == 200
     assert wiki_pages.json()["wikiPages"][0]["content"] == "Stub wiki update"
+    assert maintenance.status_code == 200
+    assert set(maintenance.json()) == {"index", "wiki", "llm", "pageCompression", "errors"}
 
 
 def test_rest_export_redacts_secrets_and_forget_memory(tmp_path):
@@ -165,6 +174,55 @@ def test_rest_export_redacts_secrets_and_forget_memory(tmp_path):
     assert memories.json()["memories"] == []
     assert search.json()["results"] == []
     assert [item["action"] for item in audit.json()["audit"]] == ["remember", "export", "forget"]
+
+
+def test_rest_import_export_json_and_rejects_unsupported_version(tmp_path):
+    source_app = create_app(ai_settings(tmp_path / "import-source.sqlite3"))
+    source_app.state.providers = type(
+        "Providers",
+        (),
+        {
+            "llm": StubLLMProvider(),
+            "embedding": StubEmbeddingProvider(),
+            "health_summary": lambda _self: {},
+        },
+    )()
+    source_app.state.memory_core.llm = source_app.state.providers.llm
+    source_app.state.search_service.embedding = source_app.state.providers.embedding
+    source_app.state.search_service.llm = source_app.state.providers.llm
+    source_client = TestClient(source_app)
+    source_client.post("/agentmemory/remember", json={"content": "REST import restores searchable memory.", "language": "en"})
+    exported = source_client.get("/agentmemory/export").json()
+
+    target_app = create_app(ai_settings(tmp_path / "import-target.sqlite3"))
+    target_app.state.providers = type(
+        "Providers",
+        (),
+        {
+            "llm": StubLLMProvider(),
+            "embedding": StubEmbeddingProvider(),
+            "health_summary": lambda _self: {},
+        },
+    )()
+    target_app.state.memory_core.llm = target_app.state.providers.llm
+    target_app.state.search_service.embedding = target_app.state.providers.embedding
+    target_app.state.search_service.llm = target_app.state.providers.llm
+    target_client = TestClient(target_app)
+
+    imported = target_client.post("/agentmemory/import", json=exported)
+    duplicate = target_client.post("/agentmemory/import", json=exported)
+    search = target_client.post("/agentmemory/search", json={"query": "searchable memory", "mode": "keyword", "matchMode": "any"})
+    bad_payload = copy.deepcopy(exported)
+    bad_payload["schemaVersion"] = 999
+    rejected = target_client.post("/agentmemory/import", json=bad_payload)
+
+    assert imported.status_code == 200
+    assert imported.json()["imported"]["memories"] == 1
+    assert imported.json()["auditId"].startswith("aud_")
+    assert duplicate.json()["skipped"]["memories"] == 1
+    assert search.json()["results"]
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"]["error"] == "invalid_import"
 
 
 def test_rest_wiki_rebuild(tmp_path):

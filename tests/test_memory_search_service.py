@@ -2,6 +2,7 @@ from agentmemory.config import Settings
 from agentmemory.core.models import (
     ContextRequest,
     ForgetRequest,
+    MaintenanceRunRequest,
     ObserveRequest,
     RememberRequest,
     SearchRequest,
@@ -215,6 +216,21 @@ def test_index_failure_preserves_source_data(tmp_path):
     assert memories[0].id == result.memoryId
     assert status.failedJobs == 1
     assert search.results
+
+
+def test_maintenance_retries_failed_index_job(tmp_path):
+    service = _service(tmp_path, embedding=StubEmbeddingProvider(fail=True))
+    service.remember(RememberRequest(content="Maintenance retries failed embedding jobs.", language="en"))
+    failed = service.search_service.process_pending()
+    assert failed[0].status == "failed"
+
+    service.search_service.embedding = StubEmbeddingProvider()
+    result = service.run_maintenance(MaintenanceRunRequest(limit=5))
+    jobs = result.index["jobs"]
+
+    assert jobs[0]["status"] == "done"
+    assert service.index_status().failedJobs == 0
+    assert service.search(SearchRequest(query="embedding jobs", mode="vector")).results
 
 
 def test_rebuild_and_repair(tmp_path):

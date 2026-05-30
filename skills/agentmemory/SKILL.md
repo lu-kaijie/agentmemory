@@ -157,6 +157,12 @@ REST 兜底：
 agentmemory export --json
 ```
 
+需要从 AgentMemory export JSON 恢复数据时：
+
+```bash
+agentmemory import --file "<export.json>" --json
+```
+
 用户明确要求删除某条长期记忆时：
 
 ```bash
@@ -166,6 +172,7 @@ agentmemory forget --memory-id "<memory-id>" --reason "<reason>" --json
 REST 兜底：
 
 - `GET /agentmemory/export`
+- `POST /agentmemory/import`
 - `POST /agentmemory/forget`
 
 ## 低频规则

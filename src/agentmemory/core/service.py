@@ -11,9 +11,13 @@ from agentmemory.core.models import (
     ForgetRequest,
     ForgetResponse,
     GovernanceExport,
+    GovernanceImportRequest,
+    GovernanceImportResponse,
     IndexJobRecord,
     KnowledgeRecord,
     LLMProcessingJobRecord,
+    MaintenanceRunRequest,
+    MaintenanceRunResponse,
     MemoryCandidateRecord,
     MemoryRecord,
     ObserveRequest,
@@ -42,6 +46,9 @@ from agentmemory.providers import LLMProvider
 from agentmemory.state import StateKV
 from agentmemory.state.schema import KV
 from agentmemory.version import __version__
+
+
+GOVERNANCE_SCHEMA_VERSION = 1
 
 
 class MemoryNotFoundError(ValueError):
@@ -357,6 +364,43 @@ class MemoryCoreService:
             knowledge.extend(distilled)
         return WikiUpdateResponse(jobs=jobs, pages=pages, knowledge=knowledge)
 
+    def retry_failed_wiki_jobs(self, limit: int = 10) -> int:
+        failed = [
+            WikiUpdateJobRecord.model_validate(item)
+            for item in self.kv.list(KV.wiki_update_jobs)
+            if item.get("status") == "failed"
+        ]
+        count = 0
+        for job in sorted(failed, key=lambda item: item.updatedAt)[:limit]:
+            job.status = "pending"
+            job.updatedAt = utc_now_iso()
+            job.lastError = None
+            self.kv.set(KV.wiki_update_jobs, job.id, job.model_dump())
+            count += 1
+        return count
+
+    def merge_pending_wiki_jobs(self) -> int:
+        pending = [
+            WikiUpdateJobRecord.model_validate(item)
+            for item in self.kv.list(KV.wiki_update_jobs)
+            if item.get("status") == "pending"
+        ]
+        merged = 0
+        by_topic: dict[WikiTopic | None, WikiUpdateJobRecord] = {}
+        for job in sorted(pending, key=lambda item: item.createdAt):
+            existing = by_topic.get(job.topic)
+            if existing is None:
+                by_topic[job.topic] = job
+                continue
+            if set(existing.sourceIds).isdisjoint(job.sourceIds):
+                continue
+            existing.sourceIds = _dedupe_strings([*existing.sourceIds, *job.sourceIds])
+            existing.updatedAt = utc_now_iso()
+            self.kv.set(KV.wiki_update_jobs, existing.id, existing.model_dump())
+            self.kv.delete(KV.wiki_update_jobs, job.id)
+            merged += 1
+        return merged
+
     def rebuild_wiki(self, request: WikiRebuildRequest) -> WikiUpdateResponse:
         topics: list[WikiTopic]
         if request.all:
@@ -388,6 +432,19 @@ class MemoryCoreService:
     async def run_wiki_worker(self, stop_event: asyncio.Event, interval_seconds: float = 10.0) -> None:
         while not stop_event.is_set():
             await asyncio.to_thread(self.process_wiki_updates, WikiUpdateRequest(limit=5))
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+            except TimeoutError:
+                pass
+
+    async def run_maintenance_worker(
+        self,
+        stop_event: asyncio.Event,
+        interval_seconds: float = 10.0,
+        limit: int = 25,
+    ) -> None:
+        while not stop_event.is_set():
+            await asyncio.to_thread(self.run_maintenance, MaintenanceRunRequest(limit=limit))
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
             except TimeoutError:
@@ -428,6 +485,7 @@ class MemoryCoreService:
         self._record_audit(audit)
         return GovernanceExport(
             version=__version__,
+            schemaVersion=GOVERNANCE_SCHEMA_VERSION,
             exportedAt=now,
             sessions=sessions,
             observations=observations,
@@ -440,6 +498,74 @@ class MemoryCoreService:
             wikiUpdateJobs=self.list_wiki_jobs(),
             indexJobs=index_jobs,
             audit=self.list_audit(),
+        )
+
+    def import_data(self, request: GovernanceImportRequest) -> GovernanceImportResponse:
+        payload = request.payload
+        schema_version = _governance_schema_version(payload)
+        imported: dict[str, int] = {}
+        skipped: dict[str, int] = {}
+        errors: list[str] = []
+
+        self._import_collection(KV.sessions, payload.get("sessions", []), SessionRecord, imported, skipped, errors, "sessions")
+        self._import_observations(payload.get("observations", []), imported, skipped, errors)
+        self._import_collection(KV.memories, payload.get("memories", []), MemoryRecord, imported, skipped, errors, "memories")
+        self._import_collection(KV.summaries, payload.get("summaries", []), SummaryRecord, imported, skipped, errors, "summaries")
+        self._import_collection(
+            KV.memory_candidates,
+            payload.get("memoryCandidates", []),
+            MemoryCandidateRecord,
+            imported,
+            skipped,
+            errors,
+            "memoryCandidates",
+        )
+        self._import_collection(
+            KV.llm_processing_jobs,
+            payload.get("llmProcessingJobs", []),
+            LLMProcessingJobRecord,
+            imported,
+            skipped,
+            errors,
+            "llmProcessingJobs",
+        )
+        self._import_collection(KV.knowledge, payload.get("knowledge", []), KnowledgeRecord, imported, skipped, errors, "knowledge")
+        self._import_collection(KV.wiki_pages, payload.get("wikiPages", []), WikiPageRecord, imported, skipped, errors, "wikiPages")
+        self._import_collection(
+            KV.wiki_update_jobs,
+            payload.get("wikiUpdateJobs", []),
+            WikiUpdateJobRecord,
+            imported,
+            skipped,
+            errors,
+            "wikiUpdateJobs",
+        )
+        self._import_collection(KV.index_jobs, payload.get("indexJobs", []), IndexJobRecord, imported, skipped, errors, "indexJobs")
+        self._import_collection(KV.audit, payload.get("audit", []), AuditRecord, imported, skipped, errors, "audit")
+        self._index_imported_data()
+
+        now = utc_now_iso()
+        audit = AuditRecord(
+            id=generate_id("aud"),
+            action="import",
+            targetType="governance",
+            targetId="agentmemory",
+            source=request.source,
+            timestamp=now,
+            details={
+                "schemaVersion": schema_version,
+                "imported": imported,
+                "skipped": skipped,
+                "errors": errors[:20],
+            },
+        )
+        self._record_audit(audit)
+        return GovernanceImportResponse(
+            schemaVersion=schema_version,
+            imported=imported,
+            skipped=skipped,
+            errors=errors,
+            auditId=audit.id,
         )
 
     def forget(self, request: ForgetRequest) -> ForgetResponse:
@@ -468,6 +594,81 @@ class MemoryCoreService:
         )
         self._record_audit(audit)
         return ForgetResponse(memoryId=request.memoryId, auditId=audit.id, deletedMemory=memory)
+
+    def _import_collection(
+        self,
+        scope: str,
+        items: object,
+        model,
+        imported: dict[str, int],
+        skipped: dict[str, int],
+        errors: list[str],
+        label: str,
+    ) -> None:
+        if not _is_list(items, label, errors):
+            return
+        for index, item in enumerate(items):
+            try:
+                record = model.model_validate(item)
+                record_id = str(record.id)
+            except Exception as exc:
+                errors.append(f"{label}[{index}]: {exc}")
+                continue
+            if self.kv.get(scope, record_id) is not None:
+                _increment(skipped, label)
+                continue
+            self.kv.set(scope, record_id, record.model_dump())
+            _increment(imported, label)
+
+    def _import_observations(
+        self,
+        items: object,
+        imported: dict[str, int],
+        skipped: dict[str, int],
+        errors: list[str],
+    ) -> None:
+        label = "observations"
+        if not _is_list(items, label, errors):
+            return
+        for index, item in enumerate(items):
+            try:
+                observation = ObservationRecord.model_validate(item)
+            except Exception as exc:
+                errors.append(f"{label}[{index}]: {exc}")
+                continue
+            scope = KV.observations(observation.sessionId)
+            if self.kv.get(scope, observation.id) is not None:
+                _increment(skipped, label)
+                continue
+            if self.kv.get(KV.sessions, observation.sessionId) is None:
+                session = SessionRecord(
+                    id=observation.sessionId,
+                    project=observation.project,
+                    cwd=observation.cwd,
+                    startedAt=observation.createdAt,
+                    updatedAt=observation.createdAt,
+                    observationCount=0,
+                )
+                self.kv.set(KV.sessions, session.id, session.model_dump())
+                _increment(imported, "sessions")
+            self.kv.set(scope, observation.id, observation.model_dump())
+            _increment(imported, label)
+
+    def _index_imported_data(self) -> None:
+        if not self.search_service:
+            return
+        observations_by_id = {observation.id: observation for observation in self.list_observations()}
+        for observation in observations_by_id.values():
+            self.search_service.index_document(observation_document(observation))
+        for memory in self.list_memories():
+            self.search_service.index_document(memory_document(memory))
+        for summary in self.list_summaries():
+            observation = observations_by_id.get(summary.observationId) if summary.observationId else None
+            self.search_service.index_document(summary_document(summary, observation))
+        for knowledge in self.list_knowledge():
+            self.search_service.index_document(knowledge_document(knowledge))
+        for page in self.list_wiki_pages():
+            self.search_service.index_document(wiki_page_document(page))
 
     def search(self, request):
         if not self.search_service:
@@ -498,6 +699,106 @@ class MemoryCoreService:
         if not self.search_service:
             raise RuntimeError("search service is not configured")
         return self.search_service.repair()
+
+    def run_maintenance(self, request: MaintenanceRunRequest | None = None) -> MaintenanceRunResponse:
+        request = request or MaintenanceRunRequest()
+        errors: list[str] = []
+        index_result: dict[str, object] = {}
+        wiki_result: dict[str, object] = {}
+        llm_result: dict[str, object] = {}
+        page_result: dict[str, object] = {"compressed": 0}
+
+        try:
+            if self.search_service:
+                index_result = self.search_service.repair()
+        except Exception as exc:
+            errors.append(f"index: {exc}")
+            index_result = {"documents": 0, "jobs": []}
+
+        try:
+            llm_result = self.retry_failed_llm_processing(request.limit)
+        except Exception as exc:
+            errors.append(f"llm: {exc}")
+            llm_result = {"jobs": []}
+
+        try:
+            merged = self.merge_pending_wiki_jobs()
+            retried = self.retry_failed_wiki_jobs(request.limit) if request.retryFailed else 0
+            wiki = self.process_wiki_updates(WikiUpdateRequest(limit=request.limit)) if self.llm else WikiUpdateResponse()
+            wiki_result = {
+                "merged": merged,
+                "retried": retried,
+                "jobs": [job.model_dump() for job in wiki.jobs],
+                "pages": [page.model_dump() for page in wiki.pages],
+                "knowledge": [item.model_dump() for item in wiki.knowledge],
+            }
+        except Exception as exc:
+            errors.append(f"wiki: {exc}")
+            wiki_result = {"merged": 0, "retried": 0, "jobs": [], "pages": [], "knowledge": []}
+
+        return MaintenanceRunResponse(
+            index=index_result,
+            wiki=wiki_result,
+            llm=llm_result,
+            pageCompression=page_result,
+            errors=errors,
+        )
+
+    def retry_failed_llm_processing(self, limit: int = 25) -> dict[str, object]:
+        if not self.llm:
+            return {"jobs": []}
+        failed = [
+            LLMProcessingJobRecord.model_validate(item)
+            for item in self.kv.list(KV.llm_processing_jobs)
+            if item.get("status") == "failed"
+        ]
+        jobs: list[LLMProcessingJobRecord] = []
+        for job in sorted(failed, key=lambda item: item.startedAt)[:limit]:
+            observation = self._observation_by_id(job.observationId)
+            if observation is None:
+                job.attempts += 1
+                job.lastError = "observation not found"
+                job.finishedAt = utc_now_iso()
+                self.kv.set(KV.llm_processing_jobs, job.id, job.model_dump())
+                jobs.append(job)
+                continue
+            job.status = "running"
+            job.attempts += 1
+            job.lastError = None
+            self.kv.set(KV.llm_processing_jobs, job.id, job.model_dump())
+            job, summary, candidates = process_observation(observation=observation, llm=self.llm, job=job)
+            if summary:
+                self.kv.set(KV.summaries, summary.id, summary.model_dump())
+                self._enqueue_wiki_job([f"summary:{summary.id}"])
+                if self.search_service:
+                    self.search_service.index_document(summary_document(summary, observation))
+            for candidate in candidates:
+                self.kv.set(KV.memory_candidates, candidate.id, candidate.model_dump())
+            self.kv.set(KV.llm_processing_jobs, job.id, job.model_dump())
+            self._record_audit(
+                AuditRecord(
+                    id=generate_id("aud"),
+                    action="llm_processing_done" if job.status == "done" else "llm_processing_failed",
+                    targetType="llm_processing_job",
+                    targetId=job.id,
+                    source="maintenance",
+                    timestamp=job.finishedAt or utc_now_iso(),
+                    details={
+                        "observationId": observation.id,
+                        "summaryId": job.summaryId,
+                        "candidateIds": job.candidateIds,
+                        "lastError": job.lastError,
+                    },
+                ),
+            )
+            jobs.append(job)
+        return {"jobs": [job.model_dump() for job in jobs]}
+
+    def _observation_by_id(self, observation_id: str) -> ObservationRecord | None:
+        for observation in self.list_observations():
+            if observation.id == observation_id:
+                return observation
+        return None
 
     def _record_audit(self, record: AuditRecord) -> None:
         self.kv.set(KV.audit, record.id, record.model_dump())
@@ -704,6 +1005,32 @@ class MemoryCoreService:
 
 def _dedupe_strings(items: list[str]) -> list[str]:
     return list(dict.fromkeys(item for item in items if item))
+
+
+def _governance_schema_version(payload: dict[str, object]) -> int:
+    raw = payload.get("schemaVersion")
+    if raw is None and payload.get("version"):
+        return GOVERNANCE_SCHEMA_VERSION
+    try:
+        schema_version = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("unsupported or missing governance schemaVersion") from exc
+    if schema_version != GOVERNANCE_SCHEMA_VERSION:
+        raise ValueError(f"unsupported governance schemaVersion: {schema_version}")
+    return schema_version
+
+
+def _is_list(value: object, label: str, errors: list[str]) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, list):
+        return True
+    errors.append(f"{label}: expected list")
+    return False
+
+
+def _increment(counter: dict[str, int], label: str) -> None:
+    counter[label] = counter.get(label, 0) + 1
 
 
 def _session_summary_input(

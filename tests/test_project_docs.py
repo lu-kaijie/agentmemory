@@ -61,3 +61,18 @@ def test_global_agent_setup_uses_skill_name_without_path():
     assert "编码任务中使用 AgentMemory skill 管理长期记忆。" in text
     assert "~/.codex" not in text
     assert "/skills/agentmemory" not in text
+
+
+def test_readme_and_technical_docs_cover_rag_and_llm_wiki():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    technical = Path("docs/technical-implementation.md").read_text(encoding="utf-8")
+
+    assert "快速开始" in readme
+    assert "配置环境变量" in readme
+    assert "RAG 是怎么用的" in readme
+    assert "LLM Wiki 是什么" in readme
+    assert "Agent 接入" in readme
+    assert "技术选型" in technical
+    assert "RAG 实现" in technical
+    assert "LLM Wiki 实现" in technical
+    assert "Maintenance 和失败恢复" in technical

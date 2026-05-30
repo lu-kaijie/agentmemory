@@ -3,7 +3,7 @@
 - [x] 1.1 创建 AI native 产品文档，说明个人长期记忆、Skill + CLI + API 接入、RAG + LLM Wiki 双层知识库、P0/P1/P2 范围和验收标准
 - [x] 1.2 初始化 Python/FastAPI 项目结构、包管理、lint、format 和测试框架
 - [x] 1.3 定义环境变量读取、默认值、配置校验和敏感值隐藏规则
-- [ ] 1.4 添加本地开发脚本、测试脚本和示例 `.env`
+- [x] 1.4 添加本地开发脚本、测试脚本和示例 `.env`
 
 ## 2. LLM Provider
 
@@ -26,9 +26,9 @@
 - [x] 4.2 实现 observation 后的 LLM 摘要、候选记忆提炼和 Wiki 更新任务
 - [x] 4.3 实现 `mem::remember`，保存用户显式 memory 并写入 audit
 - [x] 4.4 实现 session start/end 和 session summary 更新
-- [ ] 4.5 实现 LLM 或 embedding 失败时的 pending/failed 状态和重试入口
+- [x] 4.5 实现 LLM 或 embedding 失败时的 pending/failed 状态和重试入口
 - [x] 4.6 实现 `mem::wiki-update` 和 Wiki 页面来源引用维护
-- [ ] 4.7 实现 `wiki_update_job` 入队、合并、处理、失败记录和重试
+- [x] 4.7 实现 `wiki_update_job` 入队、合并、处理、失败记录和重试
 
 ## 5. 搜索与上下文
 
@@ -42,7 +42,7 @@
 
 ## 6. CLI、Skill 与 REST API
 
-- [ ] 6.1 实现 REST 服务和统一响应格式 `{ status_code, body, headers? }`
+- [x] 6.1 实现 REST 服务和统一响应格式 `{ status_code, body, headers? }`
 - [x] 6.2 实现配置脱敏、健康检查和 REST 字段校验
 - [x] 6.3 实现 `/agentmemory/observe`、`/agentmemory/remember`、`/agentmemory/search`、`/agentmemory/smart-search`、`/agentmemory/context` 和 `/agentmemory/wiki/*`
 - [x] 6.4 实现 `/agentmemory/export`、`/agentmemory/health` 和治理删除端点
@@ -58,10 +58,10 @@
 
 ## 8. 治理、Viewer 与后台任务
 
-- [ ] 8.1 实现 export/import JSON 版本字段和基础兼容校验
+- [x] 8.1 实现 export/import JSON 版本字段和基础兼容校验
 - [x] 8.2 实现治理删除和 audit 查询
 - [x] 8.3 实现 Wiki 更新审计和页面来源追踪
-- [ ] 8.4 实现后台任务调度，处理 index repair、embedding 更新、Wiki update、failed retry 和页面压缩
+- [x] 8.4 实现后台任务调度，处理 index repair、embedding 更新、Wiki update、failed retry 和页面压缩
 - [ ] 8.5 为高级能力开关添加配置测试，确认关闭时核心功能可用
 
 ## 9. 测试与验收

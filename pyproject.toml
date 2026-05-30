@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "agentmemory"
 version = "0.1.0"
 description = "AI native long-term memory service for coding agents"
-readme = "PROJECT.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1.0",

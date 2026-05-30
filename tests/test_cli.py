@@ -149,10 +149,15 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     index_repair = runner.invoke(app, ["index", "repair", "--json"])
     index_rebuild = runner.invoke(app, ["index", "rebuild", "--json"])
     exported = runner.invoke(app, ["export", "--json"])
+    export_file = tmp_path / "agentmemory-export.json"
+    if exported.exit_code == 0:
+        export_file.write_text(exported.output, encoding="utf-8")
+    imported_duplicate = runner.invoke(app, ["import", "--file", str(export_file), "--json"])
     wiki_jobs = runner.invoke(app, ["wiki", "jobs", "--json"])
     wiki_update = runner.invoke(app, ["wiki", "update", "--limit", "1", "--json"])
     wiki_knowledge = runner.invoke(app, ["wiki", "knowledge", "--json"])
     wiki_pages = runner.invoke(app, ["wiki", "pages", "--json"])
+    maintenance = runner.invoke(app, ["maintenance", "run", "--limit", "5", "--json"])
 
     assert session_start.exit_code == 0
     assert observe.exit_code == 0
@@ -173,7 +178,9 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert index_status.exit_code == 0
     assert index_repair.exit_code == 0
     assert index_rebuild.exit_code == 0
+    assert maintenance.exit_code == 0
     assert exported.exit_code == 0
+    assert imported_duplicate.exit_code == 0
     assert wiki_jobs.exit_code == 0
     assert wiki_update.exit_code == 0
     assert wiki_knowledge.exit_code == 0
@@ -189,7 +196,9 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     smart_payload = json.loads(smart.output)
     context_payload = json.loads(context.output)
     index_payload = json.loads(index_status.output)
+    maintenance_payload = json.loads(maintenance.output)
     export_payload = json.loads(exported.output)
+    import_payload = json.loads(imported_duplicate.output)
     wiki_jobs_payload = json.loads(wiki_jobs.output)
     wiki_update_payload = json.loads(wiki_update.output)
     wiki_knowledge_payload = json.loads(wiki_knowledge.output)
@@ -233,6 +242,10 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert '"evidence"' not in context_prompt.output
     assert '"wikiPages"' not in context_prompt.output
     assert index_payload["documents"] >= 2
+    assert set(maintenance_payload) == {"index", "wiki", "llm", "pageCompression", "errors"}
+    assert export_payload["schemaVersion"] == 1
+    assert import_payload["skipped"]["memories"] == 1
+    assert import_payload["auditId"].startswith("aud_")
     assert export_payload["memories"][0]["content"] == "CLI list commands support JSON output."
     assert export_payload["audit"][-1]["action"] == "export"
     assert wiki_jobs_payload["wikiUpdateJobs"]
