@@ -1,0 +1,306 @@
+.shell {
+  min-height: 100vh;
+  background: #f6f8fb;
+  color: #17202c;
+}
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 22px;
+  background: rgba(255, 255, 255, 0.94);
+  border-bottom: 1px solid #d9e0ea;
+  backdrop-filter: blur(8px);
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.header p {
+  margin: 3px 0 0;
+  color: #667085;
+}
+
+.headerActions,
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.headerActions select,
+.toolbar select,
+.toolbar input {
+  min-height: 36px;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+  background: #fff;
+  color: #17202c;
+  padding: 7px 9px;
+}
+
+.headerActions select {
+  width: min(460px, 44vw);
+}
+
+.toolbar input {
+  flex: 1;
+  min-width: 280px;
+}
+
+button {
+  min-height: 36px;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+  background: #fff;
+  color: #17202c;
+  cursor: pointer;
+  padding: 7px 10px;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.primary,
+.active,
+.activeNav {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+}
+
+.segmented button {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 18px;
+  padding: 18px 22px 26px;
+}
+
+.sidebar,
+.stack {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.panel,
+.record,
+.empty,
+.error,
+.stat {
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+
+.panel {
+  padding: 14px;
+}
+
+.panel h2,
+.stack h2,
+.compactList h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #b7791f;
+}
+
+.ok {
+  background: #16803c;
+}
+
+.warn {
+  background: #b7791f;
+}
+
+.bad {
+  background: #c2410c;
+}
+
+.stats,
+.cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stat {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  background: #f1f4f8;
+}
+
+.stat span,
+.stat small,
+.muted {
+  color: #667085;
+}
+
+.stat strong {
+  font-size: 19px;
+}
+
+.nav {
+  display: grid;
+  gap: 6px;
+}
+
+.nav button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  box-shadow: none;
+}
+
+.content {
+  min-width: 0;
+}
+
+.scopeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.records,
+.sectionGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.record {
+  padding: 11px;
+}
+
+.record p {
+  margin: 0;
+  color: #475467;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.recordTitle {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.recordTitle code {
+  color: #667085;
+  font-size: 12px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.tags span {
+  border: 1px solid #d9e0ea;
+  border-radius: 999px;
+  background: #f1f4f8;
+  color: #667085;
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+.compactList {
+  display: grid;
+  gap: 8px;
+}
+
+.empty,
+.error {
+  padding: 16px;
+  color: #667085;
+  border-style: dashed;
+  background: #f1f4f8;
+}
+
+.error {
+  color: #c2410c;
+}
+
+.softPre {
+  margin: 0;
+  white-space: pre-wrap;
+  color: #475467;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.graph {
+  height: calc(100vh - 150px);
+  min-height: 560px;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+@media (max-width: 980px) {
+  .header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .headerActions select {
+    width: 100%;
+  }
+
+  .layout,
+  .scopeGrid {
+    grid-template-columns: 1fr;
+  }
+}

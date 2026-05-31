@@ -26,8 +26,8 @@ def test_viewer_endpoint_returns_html_and_health_stays_json(tmp_path):
     assert viewer.status_code == 200
     assert "text/html" in viewer.headers["content-type"]
     assert "<title>AgentMemory Viewer</title>" in viewer.text
-    assert "data-tab=\"memories\"" in viewer.text
-    assert "data-tab=\"graph\"" in viewer.text
+    assert 'id="root"' in viewer.text
+    assert "/agentmemory/assets/" in viewer.text
     assert health.status_code == 200
     assert health.headers["content-type"].startswith("application/json")
     assert health.json()["service"] == "agentmemory"
@@ -36,33 +36,48 @@ def test_viewer_endpoint_returns_html_and_health_stays_json(tmp_path):
 def test_viewer_static_content_has_required_sections_and_no_unsupported_actions():
     from importlib import resources
 
-    html = resources.files("agentmemory.viewer").joinpath("index.html").read_text(encoding="utf-8")
+    html = resources.files("agentmemory.viewer").joinpath("dist/index.html").read_text(encoding="utf-8")
+    js_text = "\n".join(
+        item.read_text(encoding="utf-8")
+        for item in resources.files("agentmemory.viewer").joinpath("dist/assets").iterdir()
+        if item.name.endswith(".js")
+    )
 
     required = [
         "AgentMemory Viewer",
+        "/agentmemory/assets/",
+    ]
+    required_js = [
         "/agentmemory/health",
         "/agentmemory/index/status",
+        "/agentmemory/projects",
+        "/agentmemory/pins",
         "/agentmemory/sessions",
         "/agentmemory/memories",
         "/agentmemory/summaries",
         "/agentmemory/wiki/pages",
         "/agentmemory/wiki/jobs",
         "/agentmemory/wiki/knowledge",
-        "data-tab=\"knowledge\"",
         "/agentmemory/memory-candidates",
         "/agentmemory/llm-processing-jobs",
         "/agentmemory/audit",
         "/agentmemory/search",
         "/agentmemory/smart-search",
-        "buildGraph",
+        "/agentmemory/context",
+        "Global",
+        "Project",
+        "Knowledge",
+        "Graph",
+        "No graph records yet.",
     ]
     for phrase in required:
         assert phrase in html
+    for phrase in required_js:
+        assert phrase in js_text
 
     forbidden = [
         "agentmemory delete",
         "agentmemory export",
-        "agentmemory wiki",
         "agentmemory context",
         "/agentmemory/wiki/update",
         "/agentmemory/wiki/rebuild",
@@ -72,7 +87,7 @@ def test_viewer_static_content_has_required_sections_and_no_unsupported_actions(
         "delete wiki",
     ]
     for phrase in forbidden:
-        assert phrase not in html
+        assert phrase not in js_text
 
 
 def test_health_endpoint_reports_database_and_redacts_secret(tmp_path):

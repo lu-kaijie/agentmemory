@@ -74,6 +74,8 @@ uv run agentmemory serve
 - API: `http://127.0.0.1:3111/agentmemory/*`
 - Viewer: `http://127.0.0.1:3111/agentmemory/`
 
+Viewer 是 Vite + React 构建的只读观察面板，用于查看 Global / Project 记忆、pinned memory、project profile、context sections、Wiki/knowledge、搜索结果和关系图。
+
 ### 4. 检查配置
 
 ```bash

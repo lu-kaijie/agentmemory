@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 from importlib import resources
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from agentmemory.config import Settings, get_settings
 from agentmemory.core import MemoryCoreService
@@ -88,9 +89,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         search=app.state.search_service,
     )
 
+    viewer_root = resources.files("agentmemory.viewer")
+    viewer_dist = viewer_root.joinpath("dist")
+    viewer_index = viewer_dist.joinpath("index.html")
+    if viewer_dist.joinpath("assets").is_dir():
+        app.mount(
+            "/agentmemory/assets",
+            StaticFiles(directory=str(viewer_dist.joinpath("assets"))),
+            name="agentmemory-viewer-assets",
+        )
+
     @app.get("/agentmemory/", response_class=HTMLResponse)
-    def viewer() -> HTMLResponse:
-        html = resources.files("agentmemory.viewer").joinpath("index.html").read_text(encoding="utf-8")
+    def viewer() -> Response:
+        if viewer_index.is_file():
+            return FileResponse(str(viewer_index), media_type="text/html")
+        html = viewer_root.joinpath("index.html").read_text(encoding="utf-8")
         return HTMLResponse(html)
 
     @app.get("/agentmemory/livez")

@@ -16,7 +16,8 @@ AgentMemory 采用 Python + FastAPI + Typer 的本地服务架构，核心原则
 - `src/agentmemory/core/search.py`：搜索与索引服务，负责 FTS5、LanceDB、hybrid search 和 context packing。
 - `src/agentmemory/providers/`：OpenAI-compatible LLM 和 embedding provider。
 - `src/agentmemory/state/`：SQLite `StateKV`，提供统一 KV scope 和 FTS5 操作。
-- `src/agentmemory/viewer/`：内置 Viewer 静态页面。
+- `viewer/`：Vite + React + React Flow 前端工程。
+- `src/agentmemory/viewer/dist/`：Viewer 构建产物，由 FastAPI 托管。
 - `skills/agentmemory/SKILL.md`：agent 使用说明。
 
 REST 和 CLI 不直接读写 SQLite；它们只把输入转换成 Pydantic request，再调用 core service。这样能避免 CLI、REST、Viewer 行为漂移。
@@ -44,6 +45,8 @@ FastAPI 用于 REST API 和 Viewer 托管。
 - OpenAPI、请求校验、错误响应和 TestClient 都是现成能力。
 - 适合本地服务和后续服务化部署。
 - lifespan 能自然承载后台 maintenance worker。
+
+Viewer 开发时使用 Vite，构建后产物写入 `src/agentmemory/viewer/dist`。`GET /agentmemory/` 返回构建后的 `index.html`，`/agentmemory/assets/*` 返回静态资源。这样运行时仍只需要 `agentmemory serve`，不需要单独前端服务。
 
 REST 默认保持裸 JSON，避免破坏 CLI、Viewer 和现有调用方；需要统一响应时，通过 `?envelope=true` 或 `AGENTMEMORY_REST_ENVELOPE=true` 返回：
 

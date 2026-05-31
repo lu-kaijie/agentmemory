@@ -37,3 +37,4 @@ packages = ["src/agentmemory"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/agentmemory/viewer/index.html" = "agentmemory/viewer/index.html"
+"src/agentmemory/viewer/dist" = "agentmemory/viewer/dist"
