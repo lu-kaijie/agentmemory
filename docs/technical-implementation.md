@@ -12,7 +12,7 @@ AgentMemory 采用 Python + FastAPI + Typer 的本地服务架构，核心原则
 - `src/agentmemory/api/app.py`：FastAPI 装配入口，提供 REST、Viewer 和后台 maintenance worker。
 - `src/agentmemory/cli.py`：Typer CLI，供用户和 shell-capable agent 调用。
 - `src/agentmemory/core/models.py`：Pydantic 数据模型，定义请求、响应和状态记录。
-- `src/agentmemory/core/service.py`：核心业务服务，处理 observation、memory、session、Wiki、governance 和 maintenance。
+- `src/agentmemory/core/service.py`：核心业务服务，处理 observation、memory、Wiki、governance 和 maintenance。
 - `src/agentmemory/core/search.py`：搜索与索引服务，负责 FTS5、LanceDB、hybrid search 和 context packing。
 - `src/agentmemory/providers/`：OpenAI-compatible LLM 和 embedding provider。
 - `src/agentmemory/state/`：SQLite `StateKV`，提供统一 KV scope 和 FTS5 操作。
@@ -73,7 +73,6 @@ Typer 的优势：
 
 - `agentmemory observe`
 - `agentmemory remember`
-- `agentmemory session start/end`
 - `agentmemory search`
 - `agentmemory smart-search`
 - `agentmemory context`
@@ -93,7 +92,6 @@ AgentMemory 第一版定位为本地长期记忆。SQLite 的优点是：
 
 业务层不直接操作 SQL 表，而是通过 `StateKV` 按 scope 保存 JSON-like records：
 
-- `sessions`
 - `observations`
 - `memories`
 - `summaries`
@@ -128,7 +126,7 @@ Project 是一等实体 `ProjectRecord`，包含 `id`、`name`、`root`、`alias
 3. `name = basename(root)`，除非请求显式传入 project。
 4. `id = sha256(root)[:24]` 加 `proj_` 前缀，避免同名目录冲突。
 
-系统不依赖项目目录里的状态文件。这样即使 agent 被直接关闭，也不会因为文件状态未更新导致 session 失真。Session 只作为内部 evidence 容器；`observe` 没有传 `sessionId` 时，会按 project current active session + TTL 尽力归组，过期则创建新 session。
+系统不依赖项目目录里的状态文件。即使 agent 被直接关闭，也不会因为本地状态未更新导致记忆归属失真。`observe` 始终按 project 写入 observation bucket；跨任务复用依赖 project identity、scope 和检索过滤。
 
 ## Provider 设计
 
@@ -142,7 +140,6 @@ LLM provider 负责：
 - context compression
 - Wiki update proposal
 - knowledge distillation
-- session summary
 
 Embedding provider 负责：
 
@@ -163,18 +160,17 @@ Embedding provider 负责：
 `agentmemory observe` 的流程：
 
 1. 保存 observation。
-2. 更新或创建 session。
-3. 调用 LLM 生成 summary。
-4. 调用 LLM 提炼 candidate memories。
-5. 保存 summary、candidate memories 和 LLM processing job。
-6. 为 observation/summary 创建 search document 和 embedding job。
-7. 创建 Wiki update job。
-8. 写 audit。
+2. 为 observation 创建 search document，并同步写入 FTS5。
+3. 创建 embedding update job。
+4. 创建 pending LLM processing job。
+5. 创建 Wiki update job。
+6. 写 audit。
+7. 请求立即返回；后台 maintenance worker 继续处理 embedding、LLM summary/candidates 和 Wiki update。
 
 如果 LLM 失败：
 
 - observation 仍保留。
-- LLM processing job 标记为 `failed`。
+- 后台处理时将 LLM processing job 标记为 `failed`。
 - `maintenance run` 可以后续重试。
 
 ### Remember
@@ -188,18 +184,6 @@ Embedding provider 负责：
 5. 创建 Wiki update job。
 
 这类 memory 是用户明确要求长期保存的内容，不需要先进入 candidate 状态。
-
-### Session
-
-`session start` 保存会话元数据。
-
-`session end` 会：
-
-1. 汇总该 session 的 observations。
-2. 调用 LLM 生成 session summary。
-3. 保存 summary。
-4. 更新 session status、endedAt、summaryId。
-5. 为 summary 创建 search document 和 Wiki update job。
 
 ## RAG 实现
 
@@ -220,7 +204,6 @@ AgentMemory 的 RAG 是“记忆证据 RAG”，不是代码仓库全文 RAG。
 - `id`
 - `sourceType`
 - `sourceId`
-- `sessionId`
 - `content`
 - `searchableText`
 - `language`
@@ -261,7 +244,7 @@ AgentMemory 的 RAG 是“记忆证据 RAG”，不是代码仓库全文 RAG。
 2. LanceDB 召回语义结果。
 3. 根据 `sourceId` 去重。
 4. 对同时命中 keyword 和 vector 的结果加权。
-5. 应用 `sourceTypes`、`scope`、`project`、`projectId`、`sessionId`、`language`、`minScore` 等过滤。
+5. 应用 `sourceTypes`、`scope`、`project`、`projectId`、`language`、`minScore` 等过滤。
 6. 返回带 `matchSources` 的结构化结果。
 
 `matchSources` 用于告诉 agent：结果来自关键词、向量，还是两者都有。
@@ -477,7 +460,7 @@ maintenance 会处理：
 
 - index repair
 - pending/failed embedding jobs
-- failed LLM processing jobs
+- pending/failed LLM processing jobs
 - pending/failed Wiki update jobs
 - pending Wiki job 合并
 - 页面压缩结果字段预留
@@ -498,7 +481,6 @@ AgentMemory 的长期记忆必须可治理。
 `agentmemory export --json` 导出：
 
 - schemaVersion
-- sessions
 - observations
 - memories
 - summaries

@@ -125,6 +125,12 @@ class OpenAICompatibleLLMProvider:
                     "role": "system",
                     "content": (
                         "Distill durable AgentMemory knowledge from evidence. "
+                        "Return 0 to 3 <item> entries. Multiple items are allowed only when they capture "
+                        "different durable claims from the evidence. Do not write the same claim into multiple kinds "
+                        "or restate one claim with different wording. "
+                        "Use kind=semantic for stable facts and preferences, kind=procedural for reusable workflows "
+                        "or action policies, and kind=lesson for mistakes, fixes, risks, or durable cautions. "
+                        "Do not output kind=crystal here; crystals are created only by multi-evidence consolidation. "
                         "Return only XML-like output in this format:\n"
                         "<knowledge>\n"
                         '<item kind="semantic" confidence="0.8">\n'
@@ -132,12 +138,10 @@ class OpenAICompatibleLLMProvider:
                         "<concepts>comma,separated,concepts</concepts>\n"
                         "<files>comma,separated,files</files>\n"
                         "</item>\n"
-                        '<item kind="procedural" confidence="0.8"><content>Workflow or habit.</content></item>\n'
-                        '<item kind="lesson" confidence="0.8"><content>Lesson to remember.</content></item>\n'
-                        '<item kind="crystal" confidence="0.8"><content>Concise work digest.</content></item>\n'
                         "</knowledge>\n"
                         "Allowed kind values: semantic, procedural, lesson, crystal. "
-                        "Use only evidence-grounded knowledge. If nothing durable exists, output <knowledge/>."
+                        "Use only evidence-grounded knowledge. Prefer fewer items when claims overlap. "
+                        "If nothing durable exists, output <knowledge/>."
                     ),
                 },
                 {"role": "user", "content": json.dumps({"evidence": evidence}, ensure_ascii=False)},

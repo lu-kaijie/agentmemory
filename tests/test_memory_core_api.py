@@ -22,25 +22,12 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     app.state.search_service.llm = app.state.providers.llm
     client = TestClient(app)
 
-    session_start = client.post(
-        "/agentmemory/session/start",
-        json={"sessionId": "ses_api", "project": "agentmemory", "cwd": str(tmp_path)},
-    )
     observe = client.post(
         "/agentmemory/observe",
         json={
-            "sessionId": "ses_api",
             "content": "Implemented the REST memory core endpoints.",
             "type": "work-summary",
             "project": "agentmemory",
-            "language": "en",
-        },
-    )
-    session_end = client.post(
-        "/agentmemory/session/end",
-        json={
-            "sessionId": "ses_api",
-            "content": "Finished REST lifecycle acceptance.",
             "language": "en",
         },
     )
@@ -54,7 +41,6 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
         },
     )
 
-    sessions = client.get("/agentmemory/sessions")
     memories = client.get("/agentmemory/memories")
     audit = client.get("/agentmemory/audit")
     summaries = client.get("/agentmemory/summaries")
@@ -86,31 +72,21 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     wiki_lint = client.post("/agentmemory/wiki/lint")
     maintenance = client.post("/agentmemory/maintenance/run", json={"limit": 5})
 
-    assert session_start.status_code == 200
-    assert session_start.json()["session"]["status"] == "active"
     assert observe.status_code == 200
-    assert observe.json()["sessionId"] == "ses_api"
-    assert observe.json()["processingJob"]["status"] == "done"
-    assert observe.json()["summary"]["content"] == "Stub summary"
-    assert len(observe.json()["memoryCandidates"]) == 1
-    assert session_end.status_code == 200
-    assert session_end.json()["session"]["status"] == "ended"
-    assert session_end.json()["summary"]["kind"] == "session"
+    assert "sessionId" not in observe.json()
+    assert observe.json()["processingJob"]["status"] == "pending"
+    assert observe.json()["summary"] is None
+    assert observe.json()["memoryCandidates"] == []
     assert remember.status_code == 200
     assert remember.json()["memoryId"].startswith("mem_")
-    assert sessions.json()["sessions"][0]["observationCount"] == 1
-    assert sessions.json()["sessions"][0]["summaryId"] == session_end.json()["summary"]["id"]
     assert memories.json()["memories"][0]["content"] == "Memory core does not perform RAG indexing."
     assert [item["action"] for item in audit.json()["audit"]] == [
-        "session_start",
         "observe",
-        "llm_processing_done",
-        "session_end",
         "remember",
     ]
-    assert summaries.json()["summaries"][0]["content"] == "Stub summary"
-    assert candidates.json()["memoryCandidates"][0]["status"] == "candidate"
-    assert jobs.json()["llmProcessingJobs"][0]["status"] == "done"
+    assert summaries.json()["summaries"] == []
+    assert candidates.json()["memoryCandidates"] == []
+    assert jobs.json()["llmProcessingJobs"][0]["status"] == "pending"
     assert search.status_code == 200
     assert search.json()["results"]
     assert smart.status_code == 200
@@ -147,6 +123,12 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert wiki_lint.status_code == 200
     assert "issues" in wiki_lint.json()
     assert maintenance.status_code == 200
+    after_maintenance_jobs = client.get("/agentmemory/llm-processing-jobs")
+    after_maintenance_summaries = client.get("/agentmemory/summaries")
+    after_maintenance_candidates = client.get("/agentmemory/memory-candidates")
+    assert after_maintenance_jobs.json()["llmProcessingJobs"][0]["status"] == "done"
+    assert any(item["content"] == "Stub summary" for item in after_maintenance_summaries.json()["summaries"])
+    assert after_maintenance_candidates.json()["memoryCandidates"][0]["status"] == "candidate"
     assert set(maintenance.json()) == {"index", "wiki", "llm", "pageCompression", "errors"}
 
 
@@ -275,6 +257,7 @@ def test_rest_wiki_rebuild(tmp_path):
     assert all(job["status"] == "applied" for job in rebuild.json()["jobs"])
     assert len(pages.json()["wikiPages"]) == 6
     knowledge_items = knowledge.json()["knowledge"]
-    assert len(knowledge_items) == 4
+    assert {item["kind"] for item in knowledge_items} == {"semantic", "procedural", "lesson"}
+    assert all(item["kind"] != "crystal" for item in knowledge_items)
     assert all(item["fingerprint"] for item in knowledge_items)
     assert jobs.json()["wikiUpdateJobs"]

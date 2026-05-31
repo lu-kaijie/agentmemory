@@ -9,8 +9,6 @@ from agentmemory.core.models import (
     ObserveRequest,
     RememberRequest,
     SearchRequest,
-    SessionEndRequest,
-    SessionStartRequest,
     GovernanceImportRequest,
     WikiConsolidateRequest,
     WikiFileAnswerRequest,
@@ -24,12 +22,11 @@ from agentmemory.state import StateKV
 from conftest import StubEmbeddingProvider, StubLLMProvider, ai_settings
 
 
-def test_observe_creates_and_updates_session(tmp_path):
+def test_observe_creates_project_observations(tmp_path):
     service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
 
     first = service.observe(
         ObserveRequest(
-            sessionId="ses_test",
             content="Read PROJECT.md and confirmed the bootstrap scope.",
             project="agentmemory",
             cwd="/repo",
@@ -40,7 +37,6 @@ def test_observe_creates_and_updates_session(tmp_path):
     )
     second = service.observe(
         ObserveRequest(
-            sessionId="ses_test",
             content="Added memory core design notes.",
             project="agentmemory",
             cwd="/repo",
@@ -48,97 +44,34 @@ def test_observe_creates_and_updates_session(tmp_path):
         ),
     )
 
-    sessions = service.list_sessions()
+    projects = service.list_projects()
+    observations = service.list_observations()
     audit = service.list_audit()
 
-    assert first.sessionId == "ses_test"
-    assert second.sessionId == "ses_test"
-    assert len(sessions) == 1
-    assert sessions[0].observationCount == 2
-    assert sessions[0].status == "active"
-    assert sessions[0].endedAt is None
-    assert sessions[0].updatedAt >= sessions[0].startedAt
-    assert [record.action for record in audit] == [
-        "observe",
-        "llm_processing_done",
-        "observe",
-        "llm_processing_done",
-    ]
-    assert first.summary is not None
+    assert first.observation.project == "agentmemory"
+    assert second.observation.projectId == first.observation.projectId
+    assert len(projects) == 1
+    assert len(observations) == 2
+    assert {item.projectId for item in observations} == {projects[0].id}
+    assert [record.action for record in audit] == ["observe", "observe"]
     assert first.processingJob is not None
-    assert first.processingJob.status == "done"
-    assert len(first.memoryCandidates) == 1
+    assert first.processingJob.status == "pending"
+    assert first.summary is None
+    assert first.memoryCandidates == []
 
+    maintenance = service.run_maintenance(MaintenanceRunRequest(limit=5))
 
-def test_session_start_end_creates_session_summary(tmp_path):
-    kv = StateKV(tmp_path / "memory.sqlite3")
-    search = MemorySearchService(
-        kv,
-        settings=ai_settings(tmp_path / "memory.sqlite3"),
-        embedding=StubEmbeddingProvider(),
-    )
-    service = MemoryCoreService(kv, llm=StubLLMProvider(summary="Session summary"), search=search)
-
-    started = service.start_session(
-        SessionStartRequest(sessionId="ses_lifecycle", project="agentmemory", cwd="/repo"),
-    )
-    service.observe(
-        ObserveRequest(
-            sessionId=started.sessionId,
-            content="Implemented lifecycle model changes.",
-            project="agentmemory",
-            cwd="/repo",
-            language="en",
-        ),
-    )
-    ended = service.end_session(
-        SessionEndRequest(
-            sessionId=started.sessionId,
-            content="Finished lifecycle implementation.",
-            language="en",
-        ),
-    )
-    search_result = service.search(
-        SearchRequest(query="Session summary", mode="keyword", sourceTypes=["summary"]),
-    )
-
-    assert started.session.observationCount == 0
-    assert ended.session.status == "ended"
-    assert ended.session.endedAt is not None
-    assert ended.summary is not None
-    assert ended.summary.kind == "session"
-    assert ended.summary.sessionId == "ses_lifecycle"
-    assert ended.session.summaryId == ended.summary.id
-    assert service.list_sessions()[0].summaryId == ended.summary.id
-    assert search_result.results
-    assert search_result.results[0].sourceId == ended.summary.id
-    assert f"summary:{ended.summary.id}" in {source for job in service.list_wiki_jobs() for source in job.sourceIds}
-    assert [record.action for record in service.list_audit()] == [
-        "session_start",
-        "observe",
-        "llm_processing_done",
-        "session_end",
-    ]
-
-
-def test_session_end_without_observations_marks_session_ended_without_summary(tmp_path):
-    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
-
-    service.start_session(SessionStartRequest(sessionId="ses_empty"))
-    ended = service.end_session(SessionEndRequest(sessionId="ses_empty", language="en"))
-
-    assert ended.session.status == "ended"
-    assert ended.session.endedAt is not None
-    assert ended.summary is None
-    assert ended.session.summaryId is None
-
-
+    assert [job["status"] for job in maintenance.llm["jobs"]] == ["done", "done"]
+    assert len(service.list_summaries()) == 2
+    assert len(service.list_memory_candidates()) == 2
+    actions = [record.action for record in service.list_audit()]
+    assert actions[:2] == ["observe", "observe"]
+    assert actions.count("llm_processing_done") == 2
 def test_observe_saves_summary_candidates_and_job_without_auto_remember(tmp_path):
     service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
 
     result = service.observe(
         ObserveRequest(
-            sessionId="ses_processing",
             content="CLI local writes must require AI settings.",
             language="en",
         ),
@@ -149,16 +82,26 @@ def test_observe_saves_summary_candidates_and_job_without_auto_remember(tmp_path
     jobs = service.list_llm_processing_jobs()
     memories = service.list_memories()
 
-    assert result.summary is not None
-    assert result.summary.content == "Stub summary"
     assert result.processingJob is not None
-    assert result.processingJob.status == "done"
-    assert len(result.memoryCandidates) == 1
-    assert summaries[0].id == result.summary.id
-    assert candidates[0].content == "Remember the tested memory processing behavior."
-    assert jobs[0].summaryId == result.summary.id
-    assert jobs[0].candidateIds == [candidates[0].id]
+    assert result.processingJob.status == "pending"
+    assert result.summary is None
+    assert result.memoryCandidates == []
+    assert summaries == []
+    assert candidates == []
+    assert jobs[0].summaryId is None
+    assert jobs[0].candidateIds == []
     assert memories == []
+
+    service.run_maintenance(MaintenanceRunRequest(limit=5))
+    summaries = service.list_summaries()
+    candidates = service.list_memory_candidates()
+    jobs = service.list_llm_processing_jobs()
+
+    assert summaries[0].content == "Stub summary"
+    assert candidates[0].content == "Remember the tested memory processing behavior."
+    assert jobs[0].status == "done"
+    assert jobs[0].summaryId == summaries[0].id
+    assert jobs[0].candidateIds == [candidates[0].id]
 
 
 def test_observe_preserves_observation_when_llm_processing_fails(tmp_path):
@@ -166,7 +109,6 @@ def test_observe_preserves_observation_when_llm_processing_fails(tmp_path):
 
     result = service.observe(
         ObserveRequest(
-            sessionId="ses_failed",
             content="This observation should survive LLM failure.",
             language="en",
         ),
@@ -179,14 +121,20 @@ def test_observe_preserves_observation_when_llm_processing_fails(tmp_path):
 
     assert result.observationId.startswith("obs_")
     assert result.processingJob is not None
-    assert result.processingJob.status == "failed"
+    assert result.processingJob.status == "pending"
     assert result.summary is None
     assert result.memoryCandidates == []
-    assert jobs[0].status == "failed"
-    assert "stub llm failure" in (jobs[0].lastError or "")
+    assert jobs[0].status == "pending"
+    assert jobs[0].lastError is None
     assert summaries == []
     assert candidates == []
-    assert audit[-1].action == "llm_processing_failed"
+    assert audit[-1].action == "observe"
+
+    service.run_maintenance(MaintenanceRunRequest(limit=5))
+    jobs = service.list_llm_processing_jobs()
+    assert jobs[0].status == "failed"
+    assert "stub llm failure" in (jobs[0].lastError or "")
+    assert "llm_processing_failed" in [record.action for record in service.list_audit()]
 
 
 def test_remember_saves_memory_and_audit(tmp_path):
@@ -240,8 +188,9 @@ def test_multilingual_duplicate_candidate_is_not_merged(tmp_path):
 
 def test_export_data_writes_audit_and_includes_governance_records(tmp_path):
     service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
-    service.observe(ObserveRequest(sessionId="ses_export", content="Export should include observations.", language="en"))
+    service.observe(ObserveRequest(content="Export should include observations.", language="en"))
     service.remember(RememberRequest(content="Export should include memories.", language="en"))
+    service.run_maintenance(MaintenanceRunRequest(limit=5))
 
     exported = service.export_data(source="test")
 
@@ -249,7 +198,6 @@ def test_export_data_writes_audit_and_includes_governance_records(tmp_path):
     assert exported.schemaVersion == 2
     assert len(exported.projects) == 1
     assert exported.exportedAt
-    assert len(exported.sessions) == 1
     assert len(exported.observations) == 1
     assert len(exported.memories) == 1
     assert len(exported.summaries) == 1
@@ -262,7 +210,7 @@ def test_export_data_writes_audit_and_includes_governance_records(tmp_path):
 
 def test_import_data_restores_export_into_fresh_searchable_store(tmp_path):
     source = MemoryCoreService(StateKV(tmp_path / "source.sqlite3"), llm=StubLLMProvider())
-    source.observe(ObserveRequest(sessionId="ses_import", content="Import restores observations.", language="en"))
+    source.observe(ObserveRequest(content="Import restores observations.", language="en"))
     source.remember(RememberRequest(content="Import restores searchable memories.", language="en", concepts=["import"]))
     source.process_wiki_updates(WikiUpdateRequest(limit=1))
     exported = source.export_data(source="test").model_dump()
@@ -324,26 +272,27 @@ def test_forget_missing_memory_does_not_write_success_audit(tmp_path):
 def test_wiki_jobs_are_enqueued_and_applied(tmp_path):
     service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
 
-    observed = service.observe(ObserveRequest(sessionId="ses_wiki", content="Project chooses FastAPI.", language="en"))
+    observed = service.observe(ObserveRequest(content="Project chooses FastAPI.", language="en"))
     remembered = service.remember(RememberRequest(content="Use FastAPI for backend APIs.", language="en"))
     jobs = service.list_wiki_jobs()
 
-    assert len(jobs) == 3
+    assert len(jobs) == 2
     assert {source for job in jobs for source in job.sourceIds} == {
         f"observation:{observed.observationId}",
-        f"summary:{observed.summary.id}",
         f"memory:{remembered.memoryId}",
     }
 
-    result = service.process_wiki_updates(WikiUpdateRequest(limit=1))
-
-    assert len(result.jobs) == 1
-    assert result.jobs[0].status == "applied"
-    assert result.pages[0].content == "Stub wiki update"
-    assert {item.kind for item in result.knowledge} == {"semantic", "procedural", "lesson", "crystal"}
+    maintenance = service.run_maintenance(MaintenanceRunRequest(limit=5))
+    summary = service.list_summaries()[0]
+    assert f"summary:{summary.id}" in {source for job in service.list_wiki_jobs() for source in job.sourceIds}
+    assert maintenance.wiki["jobs"]
+    assert maintenance.wiki["jobs"][0]["status"] == "applied"
+    assert maintenance.wiki["pages"][0]["content"] == "Stub wiki update"
+    assert [item["kind"] for item in maintenance.wiki["knowledge"]] == ["semantic", "procedural", "lesson"]
     assert "Stub semantic knowledge" in {item.content for item in service.list_knowledge()}
-    assert service.list_wiki_pages()[0].sourceIds == result.jobs[0].sourceIds
-    assert service.list_audit()[-1].action == "wiki_update"
+    assert "Stub crystal digest" not in {item.content for item in service.list_knowledge()}
+    assert set(maintenance.wiki["jobs"][0]["sourceIds"]).issubset(set(service.list_wiki_pages()[0].sourceIds))
+    assert "wiki_update" in [record.action for record in service.list_audit()]
 
 
 def test_wiki_processing_failure_preserves_source_data(tmp_path):
@@ -382,7 +331,7 @@ def test_maintenance_retries_failed_llm_processing(tmp_path):
     service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider(fail=True))
     observed = service.observe(ObserveRequest(content="Retry failed LLM processing.", language="en"))
     assert observed.processingJob is not None
-    assert observed.processingJob.status == "failed"
+    assert observed.processingJob.status == "pending"
 
     service.llm = StubLLMProvider()
     result = service.run_maintenance(MaintenanceRunRequest(limit=5))
@@ -404,13 +353,11 @@ def test_wiki_rebuild_all_creates_jobs_and_pages(tmp_path):
     assert all(job.status == "applied" for job in result.jobs)
     assert len(service.list_wiki_pages()) == 6
     knowledge = service.list_knowledge()
-    assert len(knowledge) == 4
+    assert len(knowledge) == 3
     assert all(item.fingerprint for item in knowledge)
-    lesson = next(item for item in knowledge if item.kind == "lesson")
-    crystal = next(item for item in knowledge if item.kind == "crystal")
-    assert lesson.reinforcements == 6
-    assert lesson.lastReinforcedAt is not None
-    assert crystal.sourceGroup is not None
+    semantic = next(item for item in knowledge if item.kind == "semantic")
+    assert semantic.kind == "semantic"
+    assert semantic.reinforcements == 0
 
 
 def test_wiki_rebuild_reuses_existing_knowledge(tmp_path):
@@ -422,11 +369,11 @@ def test_wiki_rebuild_reuses_existing_knowledge(tmp_path):
     second = service.rebuild_wiki(WikiRebuildRequest(all=True))
     second_knowledge = service.list_knowledge()
 
-    assert len(first.knowledge) == 24
-    assert len(second.knowledge) == 24
+    assert len(first.knowledge) == 3
+    assert len(second.knowledge) == 3
     assert {item.id for item in second_knowledge} == first_ids
-    assert len(second_knowledge) == 4
-    assert next(item for item in second_knowledge if item.kind == "lesson").reinforcements == 12
+    assert len(second_knowledge) == 3
+    assert {item.kind for item in second_knowledge} == {"semantic", "procedural", "lesson"}
 
 
 def test_wiki_consolidation_lesson_crystal_reflect_and_lint(tmp_path):

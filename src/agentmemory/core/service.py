@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
-from datetime import datetime, timedelta, UTC
+import asyncio
 
 from agentmemory.core.ids import generate_id, utc_now_iso
 from agentmemory.core.models import (
@@ -37,11 +36,6 @@ from agentmemory.core.models import (
     ProjectRecord,
     RememberRequest,
     RememberResponse,
-    SessionEndRequest,
-    SessionEndResponse,
-    SessionRecord,
-    SessionStartRequest,
-    SessionStartResponse,
     SummaryRecord,
     WIKI_TOPICS,
     CrystalCreateRequest,
@@ -61,7 +55,7 @@ from agentmemory.core.models import (
     WikiUpdateRequest,
     WikiUpdateResponse,
 )
-from agentmemory.core.processing import create_running_job, process_observation
+from agentmemory.core.processing import create_pending_job, process_observation
 from agentmemory.core.scope import resolve_project_identity
 from agentmemory.core.search import MemorySearchService, insight_document, knowledge_document, memory_document, observation_document, summary_document, wiki_page_document
 from agentmemory.core.wiki import WIKI_TITLES, parse_knowledge_xml, parse_lint_xml, parse_wiki_consolidation_xml, parse_wiki_update_xml
@@ -72,7 +66,6 @@ from agentmemory.version import __version__
 
 
 GOVERNANCE_SCHEMA_VERSION = 2
-DEFAULT_SESSION_TTL_MINUTES = 720
 
 
 class MemoryNotFoundError(ValueError):
@@ -95,31 +88,8 @@ class MemoryCoreService:
     def observe(self, request: ObserveRequest) -> ObserveResponse:
         now = utc_now_iso()
         project = self._resolve_project_record(request.cwd, request.project, request.projectId)
-        session_id = request.sessionId or self._current_project_session_id(project, now)
-        existing = self.kv.get(KV.sessions, session_id)
-        if existing:
-            session = SessionRecord.model_validate(existing)
-            session.project = project.name
-            session.projectId = project.id
-            session.cwd = project.root
-            session.updatedAt = now
-            session.observationCount += 1
-            session.status = "active"
-            session.endedAt = None
-        else:
-            session = SessionRecord(
-                id=session_id,
-                project=project.name,
-                projectId=project.id,
-                cwd=project.root,
-                startedAt=now,
-                updatedAt=now,
-                observationCount=1,
-            )
-
         observation = ObservationRecord(
             id=generate_id("obs"),
-            sessionId=session_id,
             type=request.type,
             content=request.content,
             source=request.source,
@@ -132,9 +102,7 @@ class MemoryCoreService:
             createdAt=now,
         )
 
-        self.kv.set(KV.sessions, session.id, session.model_dump())
-        self.kv.set(KV.project_current_sessions, project.id, {"sessionId": session.id, "updatedAt": now})
-        self.kv.set(KV.observations(session.id), observation.id, observation.model_dump())
+        self.kv.set(KV.observations(project.id), observation.id, observation.model_dump())
         self._enqueue_wiki_job([f"observation:{observation.id}"])
         if self.search_service:
             self.search_service.index_document(observation_document(observation))
@@ -146,166 +114,23 @@ class MemoryCoreService:
                 targetId=observation.id,
                 source=request.source,
                 timestamp=now,
-                details={"sessionId": session.id, "type": observation.type},
+                details={"projectId": project.id, "type": observation.type},
             ),
         )
         processing_job = None
         summary = None
         memory_candidates: list[MemoryCandidateRecord] = []
         if self.llm:
-            processing_job = create_running_job(observation, now)
+            processing_job = create_pending_job(observation, now)
             self.kv.set(KV.llm_processing_jobs, processing_job.id, processing_job.model_dump())
-            processing_job, summary, memory_candidates = process_observation(
-                observation=observation,
-                llm=self.llm,
-                job=processing_job,
-            )
-            if summary:
-                self.kv.set(KV.summaries, summary.id, summary.model_dump())
-                self._enqueue_wiki_job([f"summary:{summary.id}"])
-                if self.search_service:
-                    self.search_service.index_document(summary_document(summary, observation))
-            for candidate in memory_candidates:
-                self.kv.set(KV.memory_candidates, candidate.id, candidate.model_dump())
-            self.kv.set(KV.llm_processing_jobs, processing_job.id, processing_job.model_dump())
-            self._record_audit(
-                AuditRecord(
-                    id=generate_id("aud"),
-                    action="llm_processing_done" if processing_job.status == "done" else "llm_processing_failed",
-                    targetType="llm_processing_job",
-                    targetId=processing_job.id,
-                    source=request.source,
-                    timestamp=processing_job.finishedAt or now,
-                    details={
-                        "observationId": observation.id,
-                        "summaryId": processing_job.summaryId,
-                        "candidateIds": processing_job.candidateIds,
-                        "lastError": processing_job.lastError,
-                    },
-                ),
-            )
 
         return ObserveResponse(
             observationId=observation.id,
-            sessionId=session.id,
             observation=observation,
             processingJob=processing_job,
             summary=summary,
             memoryCandidates=memory_candidates,
         )
-
-    def start_session(self, request: SessionStartRequest) -> SessionStartResponse:
-        now = utc_now_iso()
-        project = self._resolve_project_record(request.cwd, request.project, request.projectId)
-        session_id = request.sessionId or generate_id("ses")
-        existing = self.kv.get(KV.sessions, session_id)
-        if existing:
-            session = SessionRecord.model_validate(existing)
-            session.project = project.name
-            session.projectId = project.id
-            session.cwd = project.root
-            session.updatedAt = now
-            session.status = "active"
-            session.endedAt = None
-        else:
-            session = SessionRecord(
-                id=session_id,
-                project=project.name,
-                projectId=project.id,
-                cwd=project.root,
-                startedAt=now,
-                updatedAt=now,
-                observationCount=0,
-            )
-        self.kv.set(KV.sessions, session.id, session.model_dump())
-        self.kv.set(KV.project_current_sessions, project.id, {"sessionId": session.id, "updatedAt": now})
-        self._record_audit(
-            AuditRecord(
-                id=generate_id("aud"),
-                action="session_start",
-                targetType="session",
-                targetId=session.id,
-                source=request.source,
-                timestamp=now,
-                details={"project": session.project, "projectId": session.projectId, "cwd": session.cwd},
-            ),
-        )
-        return SessionStartResponse(sessionId=session.id, session=session)
-
-    def end_session(self, request: SessionEndRequest) -> SessionEndResponse:
-        now = utc_now_iso()
-        project = self._resolve_project_record(request.cwd, request.project, request.projectId)
-        raw = self.kv.get(KV.sessions, request.sessionId)
-        session = (
-            SessionRecord.model_validate(raw)
-            if raw
-            else SessionRecord(
-                id=request.sessionId,
-                project=project.name,
-                projectId=project.id,
-                cwd=project.root,
-                startedAt=now,
-                updatedAt=now,
-                observationCount=0,
-            )
-        )
-        session.project = project.name
-        session.projectId = project.id
-        session.cwd = project.root
-        session.status = "ended"
-        session.endedAt = now
-        session.updatedAt = now
-
-        summary = None
-        error = None
-        observations = [
-            ObservationRecord.model_validate(item)
-            for item in self.kv.list(KV.observations(session.id))
-        ]
-        if self.llm and observations:
-            try:
-                summary_text = self.llm.summarize(
-                    _session_summary_input(session, observations, request.content),
-                    "Summarize this coding-agent session into one concise session memory summary.",
-                )
-                summary = SummaryRecord(
-                    id=generate_id("sum"),
-                    observationId=None,
-                    sessionId=session.id,
-                    kind="session",
-                    content=summary_text,
-                    language=request.language,
-                    scope="project",
-                    project=session.project,
-                    projectId=session.projectId,
-                    createdAt=now,
-                )
-                self.kv.set(KV.summaries, summary.id, summary.model_dump())
-                session.summaryId = summary.id
-                self._enqueue_wiki_job([f"summary:{summary.id}"])
-                if self.search_service:
-                    self.search_service.index_document(summary_document(summary))
-            except Exception as exc:
-                error = str(exc)
-
-        self.kv.set(KV.sessions, session.id, session.model_dump())
-        self.kv.delete(KV.project_current_sessions, project.id)
-        self._record_audit(
-            AuditRecord(
-                id=generate_id("aud"),
-                action="session_end",
-                targetType="session",
-                targetId=session.id,
-                source=request.source,
-                timestamp=now,
-                details={
-                    "summaryId": summary.id if summary else None,
-                    "observationCount": len(observations),
-                    "lastError": error,
-                },
-            ),
-        )
-        return SessionEndResponse(sessionId=session.id, session=session, summary=summary, error=error)
 
     def remember(self, request: RememberRequest) -> RememberResponse:
         now = utc_now_iso()
@@ -343,10 +168,6 @@ class MemoryCoreService:
         )
         return RememberResponse(memoryId=memory.id, memory=memory)
 
-    def list_sessions(self) -> list[SessionRecord]:
-        items = [SessionRecord.model_validate(item) for item in self.kv.list(KV.sessions)]
-        return sorted(items, key=lambda item: item.updatedAt)
-
     def list_projects(self) -> list[ProjectRecord]:
         items = [ProjectRecord.model_validate(item) for item in self.kv.list(KV.projects)]
         return sorted(items, key=lambda item: item.updatedAt)
@@ -361,12 +182,12 @@ class MemoryCoreService:
 
     def list_observations(self) -> list[ObservationRecord]:
         observations: list[ObservationRecord] = []
-        for session in self.list_sessions():
+        for project in self.list_projects():
             observations.extend(
                 ObservationRecord.model_validate(item)
-                for item in self.kv.list(KV.observations(session.id))
+                for item in self.kv.list(KV.observations(project.id))
             )
-        return sorted(observations, key=lambda item: item.createdAt)
+        return sorted({item.id: item for item in observations}.values(), key=lambda item: item.createdAt)
 
     def list_audit(self) -> list[AuditRecord]:
         items = [AuditRecord.model_validate(item) for item in self.kv.list(KV.audit)]
@@ -501,7 +322,7 @@ class MemoryCoreService:
             if page:
                 pages.append(page)
             knowledge.extend(distilled)
-        return WikiUpdateResponse(jobs=jobs, pages=pages, knowledge=knowledge)
+        return WikiUpdateResponse(jobs=jobs, pages=pages, knowledge=_unique_knowledge_records(knowledge))
 
     def retry_failed_wiki_jobs(self, limit: int = 10) -> int:
         failed = [
@@ -576,7 +397,7 @@ class MemoryCoreService:
             if page:
                 pages.append(page)
             knowledge.extend(distilled)
-        return WikiUpdateResponse(jobs=processed, pages=pages, knowledge=knowledge)
+        return WikiUpdateResponse(jobs=processed, pages=pages, knowledge=_unique_knowledge_records(knowledge))
 
     async def run_wiki_worker(self, stop_event: asyncio.Event, interval_seconds: float = 10.0) -> None:
         while not stop_event.is_set():
@@ -606,7 +427,6 @@ class MemoryCoreService:
     def export_data(self, source: str = "cli") -> GovernanceExport:
         now = utc_now_iso()
         projects = self.list_projects()
-        sessions = self.list_sessions()
         observations = self.list_observations()
         memories = self.list_memories()
         summaries = self.list_summaries()
@@ -623,7 +443,6 @@ class MemoryCoreService:
             source=source,
             timestamp=now,
             details={
-                "sessions": len(sessions),
                 "projects": len(projects),
                 "observations": len(observations),
                 "memories": len(memories),
@@ -643,7 +462,6 @@ class MemoryCoreService:
             projects=projects,
             projectProfiles=self.list_project_profiles(),
             pinnedMemory=self.list_pinned_memory(),
-            sessions=sessions,
             observations=observations,
             memories=memories,
             summaries=summaries,
@@ -683,7 +501,6 @@ class MemoryCoreService:
             errors,
             "pinnedMemory",
         )
-        self._import_collection(KV.sessions, payload.get("sessions", []), SessionRecord, imported, skipped, errors, "sessions")
         self._import_observations(payload.get("observations", []), imported, skipped, errors)
         self._import_collection(KV.memories, payload.get("memories", []), MemoryRecord, imported, skipped, errors, "memories")
         self._import_collection(KV.summaries, payload.get("summaries", []), SummaryRecord, imported, skipped, errors, "summaries")
@@ -813,21 +630,15 @@ class MemoryCoreService:
             except Exception as exc:
                 errors.append(f"{label}[{index}]: {exc}")
                 continue
-            scope = KV.observations(observation.sessionId)
+            project_id = observation.projectId or (
+                self._resolve_project_record(cwd=observation.cwd, project=observation.project).id
+                if observation.project or observation.cwd
+                else "global"
+            )
+            scope = KV.observations(project_id)
             if self.kv.get(scope, observation.id) is not None:
                 _increment(skipped, label)
                 continue
-            if self.kv.get(KV.sessions, observation.sessionId) is None:
-                session = SessionRecord(
-                    id=observation.sessionId,
-                    project=observation.project,
-                    cwd=observation.cwd,
-                    startedAt=observation.createdAt,
-                    updatedAt=observation.createdAt,
-                    observationCount=0,
-                )
-                self.kv.set(KV.sessions, session.id, session.model_dump())
-                _increment(imported, "sessions")
             self.kv.set(scope, observation.id, observation.model_dump())
             _increment(imported, label)
 
@@ -1141,13 +952,20 @@ class MemoryCoreService:
             merged = self.merge_pending_wiki_jobs()
             retried = self.retry_failed_wiki_jobs(request.limit) if request.retryFailed else 0
             wiki = self.process_wiki_updates(WikiUpdateRequest(limit=request.limit)) if self.llm else WikiUpdateResponse()
-            consolidate = self.consolidate_wiki(WikiConsolidateRequest(limit=request.limit))
-            lesson_decay = self.decay_lessons(request.limit)
             profiles = []
             if self.llm:
                 for project in self.list_projects()[:5]:
                     try:
-                        profiles.append(self.update_project_profile(ProjectProfileUpdateRequest(projectId=project.id, limit=request.limit)).profile.model_dump())
+                        profiles.append(
+                            self.update_project_profile(
+                                ProjectProfileUpdateRequest(
+                                    project=project.name,
+                                    projectId=project.id,
+                                    cwd=project.root,
+                                    limit=request.limit,
+                                ),
+                            ).profile.model_dump(),
+                        )
                     except Exception as exc:
                         errors.append(f"profile:{project.id}: {exc}")
             wiki_result = {
@@ -1156,8 +974,6 @@ class MemoryCoreService:
                 "jobs": [job.model_dump() for job in wiki.jobs],
                 "pages": [page.model_dump() for page in wiki.pages],
                 "knowledge": [item.model_dump() for item in wiki.knowledge],
-                "consolidation": consolidate.model_dump(),
-                "lessonDecay": lesson_decay,
                 "projectProfiles": profiles,
             }
         except Exception as exc:
@@ -1175,13 +991,13 @@ class MemoryCoreService:
     def retry_failed_llm_processing(self, limit: int = 25) -> dict[str, object]:
         if not self.llm:
             return {"jobs": []}
-        failed = [
+        pending_or_failed = [
             LLMProcessingJobRecord.model_validate(item)
             for item in self.kv.list(KV.llm_processing_jobs)
-            if item.get("status") == "failed"
+            if item.get("status") in {"pending", "failed"}
         ]
         jobs: list[LLMProcessingJobRecord] = []
-        for job in sorted(failed, key=lambda item: item.startedAt)[:limit]:
+        for job in sorted(pending_or_failed, key=lambda item: item.startedAt)[:limit]:
             observation = self._observation_by_id(job.observationId)
             if observation is None:
                 job.attempts += 1
@@ -1245,31 +1061,6 @@ class MemoryCoreService:
         self.kv.set(KV.projects, record.id, record.model_dump())
         return record
 
-    def _current_project_session_id(self, project: ProjectRecord, now: str) -> str:
-        raw = self.kv.get(KV.project_current_sessions, project.id)
-        if raw and isinstance(raw, dict):
-            session_id = str(raw.get("sessionId") or "")
-            updated_at = str(raw.get("updatedAt") or "")
-            if session_id and not self._session_is_stale(updated_at, now):
-                session_raw = self.kv.get(KV.sessions, session_id)
-                if session_raw:
-                    session = SessionRecord.model_validate(session_raw)
-                    if session.status == "active":
-                        return session.id
-        return generate_id("ses")
-
-    def _session_is_stale(self, updated_at: str, now: str) -> bool:
-        try:
-            baseline = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-            current = datetime.fromisoformat(now.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-        if baseline.tzinfo is None:
-            baseline = baseline.replace(tzinfo=UTC)
-        if current.tzinfo is None:
-            current = current.replace(tzinfo=UTC)
-        return current - baseline > timedelta(minutes=DEFAULT_SESSION_TTL_MINUTES)
-
     def _record_audit(self, record: AuditRecord) -> None:
         self.kv.set(KV.audit, record.id, record.model_dump())
 
@@ -1311,7 +1102,7 @@ class MemoryCoreService:
             existing = self._wiki_page_by_topic(topic, job.scope, job.projectId)
             title = existing.title if existing else WIKI_TITLES[topic]
             evidence = self._wiki_evidence(job.sourceIds)
-            distilled = self._distill_knowledge(job, evidence)
+            distilled = self._distill_knowledge(job, evidence) if _should_distill_wiki_job(job) else []
             wiki_evidence = [*evidence, *[{"sourceId": f"knowledge:{item.id}", **item.model_dump()} for item in distilled]]
             raw = self.llm.update_wiki(topic, title, existing.content if existing else "", wiki_evidence)  # type: ignore[union-attr]
             proposal = parse_wiki_update_xml(raw)
@@ -1336,7 +1127,7 @@ class MemoryCoreService:
         if not evidence:
             return []
         raw = self.llm.distill_knowledge(evidence)  # type: ignore[union-attr]
-        proposals = parse_knowledge_xml(raw)
+        proposals = _select_distilled_knowledge(parse_knowledge_xml(raw))
         records: list[KnowledgeRecord] = []
         now = utc_now_iso()
         source_group = _knowledge_source_group(job.sourceIds)
@@ -1876,24 +1667,6 @@ def _increment(counter: dict[str, int], label: str) -> None:
     counter[label] = counter.get(label, 0) + 1
 
 
-def _session_summary_input(
-    session: SessionRecord,
-    observations: list[ObservationRecord],
-    closing_note: str | None = None,
-) -> str:
-    lines = [
-        f"Session: {session.id}",
-        f"Project: {session.project or ''}",
-        f"CWD: {session.cwd or ''}",
-    ]
-    if closing_note:
-        lines.extend(["Closing note:", closing_note.strip()])
-    lines.append("Observations:")
-    for observation in sorted(observations, key=lambda item: item.createdAt):
-        lines.append(f"- [{observation.type}] {observation.content}")
-    return "\n".join(lines)
-
-
 def _normalize_knowledge_content(content: str) -> str:
     normalized = re.sub(r"\s+", " ", content.casefold()).strip()
     normalized = re.sub(r"[^\w\s:/.-]+", "", normalized)
@@ -1913,6 +1686,49 @@ def _knowledge_source_group(source_ids: list[str]) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+def _select_distilled_knowledge(proposals: list[dict[str, object]]) -> list[dict[str, object]]:
+    candidates = [proposal for proposal in proposals if proposal.get("kind") in {"semantic", "procedural", "lesson"}]
+    if not candidates:
+        return []
+    priority = {"lesson": 3, "procedural": 2, "semantic": 1}
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            item.get("confidence") if isinstance(item.get("confidence"), float) else 0.0,
+            priority.get(str(item.get("kind")), 0),
+            len(str(item.get("content") or "")),
+        ),
+        reverse=True,
+    )
+    selected: list[dict[str, object]] = []
+    selected_terms: list[set[str]] = []
+    for candidate in ranked:
+        content = str(candidate.get("content") or "")
+        terms = set(_query_terms(_normalize_knowledge_content(content)))
+        if not terms:
+            continue
+        if any(_jaccard_similarity(terms, existing) >= 0.72 for existing in selected_terms):
+            continue
+        selected.append(candidate)
+        selected_terms.append(terms)
+        if len(selected) >= 3:
+            break
+    return selected
+
+
+def _should_distill_wiki_job(job: WikiUpdateJobRecord) -> bool:
+    # Summaries are derived from observations. Let them update Wiki prose, but
+    # avoid creating a second near-duplicate knowledge record for the same fact.
+    return any(not source_id.startswith("summary:") for source_id in job.sourceIds)
+
+
+def _unique_knowledge_records(records: list[KnowledgeRecord]) -> list[KnowledgeRecord]:
+    by_id: dict[str, KnowledgeRecord] = {}
+    for record in records:
+        by_id[record.id] = record
+    return list(by_id.values())
+
+
 def _query_terms(query: str) -> list[str]:
     return [term for term in re.split(r"[\s,，。:：/\\|]+", query.casefold()) if len(term) > 1]
 
@@ -1920,6 +1736,12 @@ def _query_terms(query: str) -> list[str]:
 def _term_overlap(text: str, terms: list[str]) -> int:
     haystack = text.casefold()
     return sum(1 for term in terms if term in haystack)
+
+
+def _jaccard_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
 
 
 def _days_between(start: str, end: str) -> int:

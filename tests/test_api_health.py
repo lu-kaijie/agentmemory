@@ -52,7 +52,6 @@ def test_viewer_static_content_has_required_sections_and_no_unsupported_actions(
         "/agentmemory/index/status",
         "/agentmemory/projects",
         "/agentmemory/pins",
-        "/agentmemory/sessions",
         "/agentmemory/memories",
         "/agentmemory/summaries",
         "/agentmemory/wiki/pages",

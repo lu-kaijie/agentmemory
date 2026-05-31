@@ -13,6 +13,15 @@ from .models import (
 )
 
 
+def create_pending_job(observation: ObservationRecord, now: str | None = None) -> LLMProcessingJobRecord:
+    return LLMProcessingJobRecord(
+        id=generate_id("job"),
+        observationId=observation.id,
+        status="pending",
+        startedAt=now or utc_now_iso(),
+    )
+
+
 def create_running_job(observation: ObservationRecord, now: str | None = None) -> LLMProcessingJobRecord:
     return LLMProcessingJobRecord(
         id=generate_id("job"),
@@ -37,7 +46,6 @@ def process_observation(
         summary = SummaryRecord(
             id=generate_id("sum"),
             observationId=observation.id,
-            sessionId=observation.sessionId,
             kind="observation",
             content=summary_content,
             language=observation.language,

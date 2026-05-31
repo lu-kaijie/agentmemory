@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  Activity,
   BookOpen,
   Brain,
   CircleAlert,
@@ -24,7 +23,6 @@ type Tab =
   | 'projects'
   | 'pins'
   | 'memories'
-  | 'sessions'
   | 'wiki'
   | 'knowledge'
   | 'jobs'
@@ -38,7 +36,6 @@ type AppState = {
   index: AnyRecord | null
   projects: AnyRecord[]
   pins: AnyRecord[]
-  sessions: AnyRecord[]
   memories: AnyRecord[]
   summaries: AnyRecord[]
   wikiPages: AnyRecord[]
@@ -54,7 +51,6 @@ const emptyState: AppState = {
   index: null,
   projects: [],
   pins: [],
-  sessions: [],
   memories: [],
   summaries: [],
   wikiPages: [],
@@ -72,7 +68,6 @@ const tabs: Array<{ id: Tab; label: string; icon: any }> = [
   { id: 'projects', label: 'Projects', icon: Database },
   { id: 'pins', label: 'Pins', icon: Pin },
   { id: 'memories', label: 'Memories', icon: BookOpen },
-  { id: 'sessions', label: 'Sessions', icon: Activity },
   { id: 'wiki', label: 'Wiki', icon: FileSearch },
   { id: 'knowledge', label: 'Knowledge', icon: Brain },
   { id: 'jobs', label: 'Jobs', icon: CircleAlert },
@@ -115,7 +110,6 @@ function App() {
         index,
         projects,
         pins,
-        sessions,
         memories,
         summaries,
         wikiPages,
@@ -129,7 +123,6 @@ function App() {
         api('/agentmemory/index/status'),
         api('/agentmemory/projects'),
         api('/agentmemory/pins'),
-        api('/agentmemory/sessions'),
         api('/agentmemory/memories'),
         api('/agentmemory/summaries'),
         api('/agentmemory/wiki/pages'),
@@ -144,7 +137,6 @@ function App() {
         index,
         projects: projects.projects ?? [],
         pins: pins.pinnedMemory ?? [],
-        sessions: sessions.sessions ?? [],
         memories: memories.memories ?? [],
         summaries: summaries.summaries ?? [],
         wikiPages: wikiPages.wikiPages ?? [],
@@ -253,7 +245,6 @@ function App() {
           {tab === 'projects' && <RecordList title="Projects" records={data.projects} />}
           {tab === 'pins' && <RecordList title="Pinned Memory" records={filtered.pins} />}
           {tab === 'memories' && <RecordList title="Memories" records={filtered.memories} />}
-          {tab === 'sessions' && <RecordList title="Sessions" records={filtered.sessions} />}
           {tab === 'wiki' && <RecordList title="Wiki Pages" records={filtered.wikiPages} />}
           {tab === 'knowledge' && <RecordList title="Knowledge" records={filtered.knowledge} />}
           {tab === 'jobs' && <RecordList title="Jobs" records={[...filtered.llmJobs, ...filtered.wikiJobs, ...filtered.candidates]} />}
@@ -312,7 +303,7 @@ function Overview({ data, selectedProject }: { data: AppState; selectedProject: 
         </section>
       </div>
       <div className={styles.cards}>
-        <Stat label="Sessions" value={data.sessions.length} detail="project evidence" />
+        <Stat label="Projects" value={data.projects.length} detail="scoped evidence" />
         <Stat label="Memories" value={data.memories.length} detail="explicit records" />
         <Stat label="Wiki Pages" value={data.wikiPages.length} detail="topic and dynamic pages" />
         <Stat label="Knowledge" value={data.knowledge.length} detail="semantic/procedural/lesson/crystal" />
@@ -432,7 +423,6 @@ function RecordCard({ record }: { record: AnyRecord }) {
     record.scope,
     record.project,
     record.projectId,
-    record.sessionId,
     record.topic,
     record.language,
     record.enabled === false ? 'disabled' : null,
@@ -484,7 +474,6 @@ function filterData(data: AppState, scope: Scope, projectId: string): AppState {
   return {
     ...data,
     pins: data.pins.filter(visible),
-    sessions: data.sessions.filter((item) => !projectId || item.projectId === projectId),
     memories: data.memories.filter(visible),
     summaries: data.summaries.filter(visible),
     wikiPages: data.wikiPages.filter(visible),
@@ -513,10 +502,6 @@ function buildGraph(data: AppState): { nodes: Node[]; edges: Edge[] } {
   for (const pin of data.pins) {
     addNode(`pin:${pin.id}`, short(pin.content, 28), 'pin')
     if (pin.projectId) addEdge(`pin:${pin.id}`, `project:${pin.projectId}`, 'pinned_to')
-  }
-  for (const session of data.sessions) {
-    addNode(`session:${session.id}`, session.id, 'session')
-    if (session.projectId) addEdge(`session:${session.id}`, `project:${session.projectId}`, 'belongs_to')
   }
   for (const memory of data.memories) {
     addNode(`memory:${memory.id}`, short(memory.content, 28), 'memory')

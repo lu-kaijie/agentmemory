@@ -46,7 +46,6 @@ def test_indexing_on_observe_summary_and_remember(tmp_path):
 
     observed = service.observe(
         ObserveRequest(
-            sessionId="ses_search",
             content="FastAPI search indexing should cover observations.",
             language="en",
             project="agentmemory",
@@ -62,14 +61,20 @@ def test_indexing_on_observe_summary_and_remember(tmp_path):
     )
 
     status = service.index_status()
-    assert observed.summary is not None
+    assert observed.summary is None
+    assert observed.processingJob is not None
+    assert observed.processingJob.status == "pending"
     assert remembered.memoryId.startswith("mem_")
-    assert status.documents == 3
-    assert status.fts5["documents"] == 3
+    assert status.documents == 2
+    assert status.fts5["documents"] == 2
     assert status.failedJobs == 0
     jobs = service.search_service.process_pending()
-    assert len(jobs) == 3
+    assert len(jobs) == 2
     assert all(job.status == "done" for job in jobs)
+
+    service.run_maintenance(MaintenanceRunRequest(limit=5))
+    status = service.index_status()
+    assert status.documents >= 3
 
 
 def test_write_enqueues_embedding_without_blocking_keyword_search(tmp_path):
@@ -312,7 +317,7 @@ def test_distilled_knowledge_is_indexed_and_searchable(tmp_path):
     result = service.process_wiki_updates()
     service.search_service.process_pending()
 
-    assert {item.kind for item in result.knowledge} == {"semantic", "procedural", "lesson", "crystal"}
+    assert {item.kind for item in result.knowledge} == {"semantic", "procedural", "lesson"}
     search = service.search(SearchRequest(query="semantic knowledge", mode="hybrid", sourceTypes=["knowledge"]))
     assert search.results
     assert {item.sourceType for item in search.results} == {"knowledge"}
@@ -320,7 +325,7 @@ def test_distilled_knowledge_is_indexed_and_searchable(tmp_path):
 
 def test_context_uses_default_durable_sources_and_groups_results(tmp_path):
     service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
-    service.observe(ObserveRequest(sessionId="ses_context", content="Observation should not be default context.", language="en"))
+    service.observe(ObserveRequest(content="Observation should not be default context.", language="en"))
     service.remember(RememberRequest(content="Memory context should include durable project decisions.", language="en"))
     service.process_wiki_updates()
     service.search_service.process_pending()
@@ -357,7 +362,6 @@ def test_context_honors_source_type_project_and_language_filters(tmp_path):
     service = _service(tmp_path, embedding=StubEmbeddingProvider(), llm=StubLLMProvider())
     service.observe(
         ObserveRequest(
-            sessionId="ses_context_filter",
             content="Filtered observation context evidence.",
             language="en",
             project="agentmemory",

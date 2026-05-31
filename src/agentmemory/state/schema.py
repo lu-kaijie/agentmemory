@@ -4,8 +4,6 @@ class KV:
     projects = "mem:projects"
     project_profiles = "mem:projectProfiles"
     pinned_memory = "mem:pinnedMemory"
-    project_current_sessions = "mem:projectCurrentSessions"
-    sessions = "mem:sessions"
     memories = "mem:memories"
     summaries = "mem:summaries"
     knowledge = "mem:knowledge"
@@ -19,5 +17,5 @@ class KV:
     audit = "mem:audit"
 
     @staticmethod
-    def observations(session_id: str) -> str:
-        return f"mem:observations:{session_id}"
+    def observations(project_id: str) -> str:
+        return f"mem:observations:{project_id}"

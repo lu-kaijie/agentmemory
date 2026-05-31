@@ -40,22 +40,8 @@ WIKI_TOPICS: tuple[WikiTopic, ...] = (
 )
 
 
-class SessionRecord(BaseModel):
-    id: str
-    project: str | None = None
-    projectId: str | None = None
-    cwd: str | None = None
-    startedAt: str
-    updatedAt: str
-    observationCount: int = 0
-    status: Literal["active", "ended"] = "active"
-    endedAt: str | None = None
-    summaryId: str | None = None
-
-
 class ObservationRecord(BaseModel):
     id: str
-    sessionId: str
     type: str = "work-summary"
     content: str
     source: str = "cli"
@@ -94,8 +80,7 @@ class MemoryRecord(BaseModel):
 class SummaryRecord(BaseModel):
     id: str
     observationId: str | None = None
-    sessionId: str | None = None
-    kind: Literal["observation", "session"] = "observation"
+    kind: Literal["observation"] = "observation"
     content: str
     source: str = "llm"
     language: Language = "unknown"
@@ -121,7 +106,7 @@ class MemoryCandidateRecord(BaseModel):
 class LLMProcessingJobRecord(BaseModel):
     id: str
     observationId: str
-    status: Literal["running", "done", "failed"]
+    status: Literal["pending", "running", "done", "failed"]
     summaryId: str | None = None
     candidateIds: list[str] = Field(default_factory=list)
     attempts: int = 0
@@ -290,14 +275,11 @@ class AuditRecord(BaseModel):
         "index_done",
         "index_failed",
         "knowledge_distill",
-        "session_end",
-        "session_start",
         "wiki_update",
     ]
     targetType: Literal[
         "observation",
         "memory",
-        "session",
         "llm_processing_job",
         "index_job",
         "governance",
@@ -312,7 +294,6 @@ class AuditRecord(BaseModel):
 
 class ObserveRequest(BaseModel):
     content: str = Field(min_length=1)
-    sessionId: str | None = None
     type: str = "work-summary"
     source: str = "cli"
     language: Language = "unknown"
@@ -325,41 +306,10 @@ class ObserveRequest(BaseModel):
 
 class ObserveResponse(BaseModel):
     observationId: str
-    sessionId: str
     observation: ObservationRecord
     processingJob: LLMProcessingJobRecord | None = None
     summary: SummaryRecord | None = None
     memoryCandidates: list[MemoryCandidateRecord] = Field(default_factory=list)
-
-
-class SessionStartRequest(BaseModel):
-    sessionId: str | None = None
-    source: str = "cli"
-    project: str | None = None
-    projectId: str | None = None
-    cwd: str | None = None
-
-
-class SessionStartResponse(BaseModel):
-    sessionId: str
-    session: SessionRecord
-
-
-class SessionEndRequest(BaseModel):
-    sessionId: str = Field(min_length=1)
-    source: str = "cli"
-    content: str | None = None
-    language: Language = "unknown"
-    project: str | None = None
-    projectId: str | None = None
-    cwd: str | None = None
-
-
-class SessionEndResponse(BaseModel):
-    sessionId: str
-    session: SessionRecord
-    summary: SummaryRecord | None = None
-    error: str | None = None
 
 
 class RememberRequest(BaseModel):
@@ -401,7 +351,6 @@ class GovernanceExport(BaseModel):
     projects: list["ProjectRecord"] = Field(default_factory=list)
     projectProfiles: list["ProjectProfileRecord"] = Field(default_factory=list)
     pinnedMemory: list["PinnedMemoryRecord"] = Field(default_factory=list)
-    sessions: list[SessionRecord] = Field(default_factory=list)
     observations: list[ObservationRecord] = Field(default_factory=list)
     memories: list[MemoryRecord] = Field(default_factory=list)
     summaries: list[SummaryRecord] = Field(default_factory=list)
@@ -453,7 +402,6 @@ class SearchDocument(BaseModel):
     id: str
     sourceType: SourceType
     sourceId: str
-    sessionId: str | None = None
     content: str
     searchableText: str
     language: Language = "unknown"
@@ -469,7 +417,6 @@ class SearchResult(BaseModel):
     documentId: str
     sourceType: SourceType
     sourceId: str
-    sessionId: str | None = None
     content: str
     score: float
     language: Language = "unknown"
@@ -489,7 +436,6 @@ class SearchRequest(BaseModel):
     scope: MemoryScope | None = None
     project: str | None = None
     projectId: str | None = None
-    sessionId: str | None = None
     language: Language | None = None
     sourceTypes: list[SourceType] = Field(default_factory=list)
     minScore: float | None = Field(default=None, ge=0.0)

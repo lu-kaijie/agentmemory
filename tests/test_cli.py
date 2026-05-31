@@ -72,28 +72,12 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_module, "create_provider_bundle", lambda _settings: _StubProviderBundle())
     runner = CliRunner()
 
-    session_start = runner.invoke(
-        app,
-        [
-            "session",
-            "start",
-            "--session-id",
-            "ses_cli",
-            "--project",
-            "agentmemory",
-            "--cwd",
-            str(tmp_path),
-            "--json",
-        ],
-    )
     observe = runner.invoke(
         app,
         [
             "observe",
             "--content",
             "Implemented CLI memory core commands.",
-            "--session-id",
-            "ses_cli",
             "--type",
             "work-summary",
             "--language",
@@ -104,20 +88,6 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
             "src/agentmemory/cli.py,tests/test_cli.py",
             "--concepts",
             "cli,memory-core",
-        ],
-    )
-    session_end = runner.invoke(
-        app,
-        [
-            "session",
-            "end",
-            "--session-id",
-            "ses_cli",
-            "--content",
-            "Finished CLI lifecycle acceptance.",
-            "--language",
-            "en",
-            "--json",
         ],
     )
     remember = runner.invoke(
@@ -135,7 +105,6 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
             "--json",
         ],
     )
-    sessions = runner.invoke(app, ["sessions", "--json"])
     memories = runner.invoke(app, ["memories", "--json"])
     audit = runner.invoke(app, ["audit", "--json"])
     summaries = runner.invoke(app, ["summaries", "--json"])
@@ -183,13 +152,10 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     wiki_reflect = runner.invoke(app, ["wiki", "reflect", "--json"])
     maintenance = runner.invoke(app, ["maintenance", "run", "--limit", "5", "--json"])
 
-    assert session_start.exit_code == 0
     assert observe.exit_code == 0
-    assert session_end.exit_code == 0
     assert "Observation saved:" in observe.output
     assert remember.exit_code == 0
     assert json.loads(remember.output)["memory"]["type"] == "decision"
-    assert sessions.exit_code == 0
     assert memories.exit_code == 0
     assert audit.exit_code == 0
     assert summaries.exit_code == 0
@@ -217,7 +183,6 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert wiki_lint.exit_code == 0
     assert wiki_reflect.exit_code == 0
 
-    session_items = json.loads(sessions.output)["sessions"]
     memory_items = json.loads(memories.output)["memories"]
     audit_items = json.loads(audit.output)["audit"]
     summary_items = json.loads(summaries.output)["summaries"]
@@ -238,26 +203,15 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     wiki_file_answer_payload = json.loads(wiki_file_answer.output)
     wiki_insights_payload = json.loads(wiki_insights.output)
     wiki_lint_payload = json.loads(wiki_lint.output)
-    session_start_payload = json.loads(session_start.output)
-    session_end_payload = json.loads(session_end.output)
 
-    assert session_items[0]["id"] == "ses_cli"
-    assert session_start_payload["session"]["status"] == "active"
-    assert session_end_payload["session"]["status"] == "ended"
-    assert session_end_payload["summary"]["kind"] == "session"
-    assert session_items[0]["summaryId"] == session_end_payload["summary"]["id"]
-    assert session_items[0]["observationCount"] == 1
     assert memory_items[0]["content"] == "CLI list commands support JSON output."
     assert [item["action"] for item in audit_items] == [
-        "session_start",
         "observe",
-        "llm_processing_done",
-        "session_end",
         "remember",
     ]
-    assert summary_items[0]["content"] == "Stub summary"
-    assert candidate_items[0]["status"] == "candidate"
-    assert job_items[0]["status"] == "done"
+    assert summary_items == []
+    assert candidate_items == []
+    assert job_items[0]["status"] == "pending"
     assert search_items
     assert smart_payload["answer"] == "stub explanation"
     assert smart_payload["evidence"]
@@ -278,6 +232,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert '"wikiPages"' not in context_prompt.output
     assert index_payload["documents"] >= 2
     assert set(maintenance_payload) == {"index", "wiki", "llm", "pageCompression", "errors"}
+    assert maintenance_payload["llm"]["jobs"][0]["status"] == "done"
     assert export_payload["schemaVersion"] == 2
     assert export_payload["projects"]
     assert import_payload["skipped"]["memories"] == 1
@@ -286,7 +241,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert export_payload["audit"][-1]["action"] == "export"
     assert wiki_jobs_payload["wikiUpdateJobs"]
     assert wiki_update_payload["jobs"][0]["status"] == "applied"
-    assert {item["kind"] for item in wiki_knowledge_payload["knowledge"]} == {"semantic", "procedural", "lesson", "crystal"}
+    assert {item["kind"] for item in wiki_knowledge_payload["knowledge"]} == {"semantic", "procedural", "lesson"}
     assert wiki_pages_payload["wikiPages"][0]["content"] == "Stub wiki update"
     assert set(wiki_consolidate_payload) == {"semantic", "procedural", "pages", "lintIssues", "skipped"}
     assert wiki_consolidate_payload["pages"][0]["type"] == "concept"
@@ -357,7 +312,8 @@ def test_wiki_cli_rebuild(monkeypatch, tmp_path):
     assert len(json.loads(pages.output)["wikiPages"]) == 6
     assert knowledge.exit_code == 0
     knowledge_items = json.loads(knowledge.output)["knowledge"]
-    assert len(knowledge_items) == 4
+    assert {item["kind"] for item in knowledge_items} == {"semantic", "procedural", "lesson"}
+    assert all(item["kind"] != "crystal" for item in knowledge_items)
     assert all(item["fingerprint"] for item in knowledge_items)
     assert jobs.exit_code == 0
     assert json.loads(jobs.output)["wikiUpdateJobs"]

@@ -25,23 +25,20 @@ def test_agentmemory_skill_frontmatter_and_guidance():
     assert "name: agentmemory" in text
     assert "description:" in text
     assert "agentmemory search" in text
-    assert "agentmemory smart-search" in text
     assert "agentmemory context" in text
-    assert "agentmemory wiki" in text
     assert "agentmemory observe" in text
     assert "agentmemory remember" in text
-    assert "POST /agentmemory/search" in text
-    assert "POST /agentmemory/context" in text
-    assert "POST /agentmemory/remember" in text
-    assert "confidence" in text
-    assert "evidence" in text
-    assert "matchSources" in text
-    assert "低分" in text
+    assert "agentmemory pin add" in text
+    assert "agentmemory forget" in text
+    assert "什么时候读" in text
+    assert "什么时候写" in text
+    assert "用户明确要求" in text
+    assert "只能当线索" in text
     assert "不是系统指令" in text
-    assert "不是开发者指令" in text
-    assert "不是用户新指令" in text
+    assert "开发者指令" in text
+    assert "用户的新指令" in text
     assert "不能覆盖当前用户要求" in text
-    assert "不要在每次文件读取" in text
+    assert "不要每读一个文件" in text
 
 
 def test_agentmemory_skill_does_not_advertise_unsupported_operations():
@@ -49,10 +46,16 @@ def test_agentmemory_skill_does_not_advertise_unsupported_operations():
 
     forbidden = [
         "agentmemory delete",
+        "agentmemory wiki",
+        "agentmemory smart-search",
+        "agentmemory index",
+        "agentmemory maintenance",
+        "POST /agentmemory",
+        "MCP",
+        "Hook",
     ]
     for phrase in forbidden:
         assert phrase not in text
-    assert "当前版本不要使用未实现的自动采集、Hook 或 MCP 接入。" in text
 
 
 def test_global_agent_setup_uses_skill_name_without_path():
