@@ -11,15 +11,22 @@ from agentmemory.config import get_settings
 from agentmemory.core.models import (
     ContextResponse,
     ContextRequest,
+    CrystalCreateRequest,
     ForgetRequest,
     GovernanceImportRequest,
+    LessonRecallRequest,
     MaintenanceRunRequest,
     ObserveRequest,
+    PinMemoryRequest,
+    ProjectProfileUpdateRequest,
     RememberRequest,
     SearchRequest,
     SessionEndRequest,
     SessionStartRequest,
     SmartSearchRequest,
+    WikiConsolidateRequest,
+    WikiFileAnswerRequest,
+    WikiReflectRequest,
     WikiRebuildRequest,
     WikiUpdateRequest,
 )
@@ -33,10 +40,14 @@ index_app = typer.Typer(help="Search index commands")
 session_app = typer.Typer(help="Session lifecycle commands")
 wiki_app = typer.Typer(help="Wiki commands")
 maintenance_app = typer.Typer(help="Maintenance commands")
+pin_app = typer.Typer(help="Pinned memory commands")
+project_app = typer.Typer(help="Project commands")
 app.add_typer(index_app, name="index")
 app.add_typer(session_app, name="session")
 app.add_typer(wiki_app, name="wiki")
 app.add_typer(maintenance_app, name="maintenance")
+app.add_typer(pin_app, name="pin")
+app.add_typer(project_app, name="project")
 
 
 @app.command()
@@ -208,6 +219,9 @@ def remember(
     content: str = typer.Option(..., "--content", "-c", help="Memory content."),
     type: str = typer.Option("fact", "--type", help="Memory type."),
     language: str = typer.Option("unknown", "--language", help="zh, en, mixed, or unknown."),
+    scope: str = typer.Option("global", "--scope", help="global or project."),
+    project: str | None = typer.Option(None, "--project"),
+    project_id: str | None = typer.Option(None, "--project-id"),
     concepts: str | None = typer.Option(None, "--concepts", help="Comma-separated concepts."),
     files: str | None = typer.Option(None, "--files", help="Comma-separated file paths."),
     json_output: bool = typer.Option(False, "--json", help="Output JSON."),
@@ -220,6 +234,9 @@ def remember(
             language=language,  # type: ignore[arg-type]
             concepts=_split_csv(concepts),
             files=_split_csv(files),
+            scope=scope,  # type: ignore[arg-type]
+            project=project,
+            projectId=project_id,
         ),
     )
     if json_output:
@@ -283,6 +300,96 @@ def list_sessions(json_output: bool = typer.Option(False, "--json", help="Output
                 f"{item['id']} status={item['status']} observations={item['observationCount']} "
                 f"updated={item['updatedAt']} summary={item.get('summaryId') or '-'}",
             )
+
+
+@project_app.command("list")
+def project_list(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List known projects."""
+    items = [item.model_dump() for item in _memory_core().list_projects()]
+    if json_output:
+        _emit({"projects": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} {item['name']} root={item['root']}")
+
+
+@project_app.command("profile")
+def project_profile(
+    project_id: str | None = typer.Option(None, "--project-id"),
+    project: str | None = typer.Option(None, "--project"),
+    cwd: str | None = typer.Option(None, "--cwd"),
+    update: bool = typer.Option(False, "--update", help="Update profile with LLM before printing."),
+    limit: int = typer.Option(25, "--limit", min=1, max=500),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Show or update the project profile."""
+    core = _memory_core()
+    if update:
+        result = core.update_project_profile(ProjectProfileUpdateRequest(project=project, projectId=project_id, cwd=cwd, limit=limit))
+        payload = result.model_dump()
+    else:
+        resolved = core._resolve_project_record(cwd=cwd, project=project, project_id=project_id)
+        profile = core.project_profile(resolved.id)
+        payload = {"project": resolved.model_dump(), "profile": profile.model_dump() if profile else None}
+    if json_output:
+        _emit(payload, True)
+    else:
+        profile_payload = payload.get("profile") if isinstance(payload, dict) else None
+        typer.echo(profile_payload.get("content") if isinstance(profile_payload, dict) and profile_payload else "No project profile.")
+
+
+@pin_app.command("add")
+def pin_add(
+    content: str = typer.Option(..., "--content", "-c"),
+    scope: str = typer.Option("global", "--scope", help="global or project."),
+    project: str | None = typer.Option(None, "--project"),
+    project_id: str | None = typer.Option(None, "--project-id"),
+    source_ids: str | None = typer.Option(None, "--source-ids"),
+    priority: int = typer.Option(100, "--priority", min=0, max=1000),
+    confidence: float | None = typer.Option(None, "--confidence", min=0.0, max=1.0),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Add pinned memory to context priority slots."""
+    result = _memory_core().pin_memory(
+        PinMemoryRequest(
+            content=content,
+            scope=scope,  # type: ignore[arg-type]
+            project=project,
+            projectId=project_id,
+            sourceIds=_split_csv(source_ids),
+            priority=priority,
+            confidence=confidence,
+        ),
+    ).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Pinned memory added: {result['pinned']['id']}")
+
+
+@pin_app.command("list")
+def pin_list(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List pinned memory."""
+    items = [item.model_dump() for item in _memory_core().list_pinned_memory()]
+    if json_output:
+        _emit({"pinnedMemory": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} scope={item['scope']} enabled={item['enabled']} {item['content']}")
+
+
+@pin_app.command("disable")
+def pin_disable(pin_id: str = typer.Option(..., "--pin-id"), json_output: bool = typer.Option(False, "--json")) -> None:
+    """Disable pinned memory without deleting it."""
+    result = _memory_core().disable_pinned_memory(pin_id).model_dump()
+    _emit({"pinned": result}, json_output)
+
+
+@pin_app.command("delete")
+def pin_delete(pin_id: str = typer.Option(..., "--pin-id"), json_output: bool = typer.Option(False, "--json")) -> None:
+    """Delete pinned memory."""
+    deleted = _memory_core().delete_pinned_memory(pin_id)
+    _emit({"deleted": deleted, "pinId": pin_id}, json_output)
 
 
 @app.command("memories")
@@ -397,6 +504,9 @@ def search_command(
     mode: str = typer.Option("keyword", "--mode", help="keyword, vector, or hybrid."),
     limit: int = typer.Option(10, "--limit", min=1, max=50),
     project: str | None = typer.Option(None, "--project"),
+    project_id: str | None = typer.Option(None, "--project-id"),
+    scope: str | None = typer.Option(None, "--scope", help="global or project."),
+    session_id: str | None = typer.Option(None, "--session-id"),
     language: str | None = typer.Option(None, "--language"),
     source_types: str | None = typer.Option(None, "--source-types", help="Comma-separated source types."),
     min_score: float | None = typer.Option(None, "--min-score", min=0.0),
@@ -409,7 +519,10 @@ def search_command(
             query=query,
             mode=mode,  # type: ignore[arg-type]
             limit=limit,
+            scope=scope,  # type: ignore[arg-type]
             project=project,
+            projectId=project_id,
+            sessionId=session_id,
             language=language,  # type: ignore[arg-type]
             sourceTypes=_source_types(source_types),
             minScore=min_score,
@@ -429,6 +542,9 @@ def smart_search_command(
     mode: str = typer.Option("hybrid", "--mode", help="keyword, vector, or hybrid."),
     limit: int = typer.Option(10, "--limit", min=1, max=50),
     project: str | None = typer.Option(None, "--project"),
+    project_id: str | None = typer.Option(None, "--project-id"),
+    scope: str | None = typer.Option(None, "--scope", help="global or project."),
+    session_id: str | None = typer.Option(None, "--session-id"),
     language: str | None = typer.Option(None, "--language"),
     source_types: str | None = typer.Option(None, "--source-types", help="Comma-separated source types."),
     min_score: float | None = typer.Option(None, "--min-score", min=0.0),
@@ -441,7 +557,10 @@ def smart_search_command(
             query=query,
             mode=mode,  # type: ignore[arg-type]
             limit=limit,
+            scope=scope,  # type: ignore[arg-type]
             project=project,
+            projectId=project_id,
+            sessionId=session_id,
             language=language,  # type: ignore[arg-type]
             sourceTypes=_source_types(source_types),
             minScore=min_score,
@@ -460,6 +579,9 @@ def context_command(
     token_budget: int = typer.Option(1200, "--token-budget", min=100, max=20000),
     limit: int = typer.Option(10, "--limit", min=1, max=50),
     project: str | None = typer.Option(None, "--project"),
+    project_id: str | None = typer.Option(None, "--project-id"),
+    cwd: str | None = typer.Option(None, "--cwd"),
+    scope: str = typer.Option("project", "--scope", help="global or project."),
     language: str | None = typer.Option(None, "--language"),
     source_types: str | None = typer.Option(None, "--source-types", help="Comma-separated source types."),
     min_score: float | None = typer.Option(None, "--min-score", min=0.0),
@@ -472,7 +594,10 @@ def context_command(
             query=query,
             tokenBudget=token_budget,
             limit=limit,
+            scope=scope,  # type: ignore[arg-type]
             project=project,
+            projectId=project_id,
+            cwd=cwd,
             language=language,  # type: ignore[arg-type]
             sourceTypes=_source_types(source_types),
             minScore=min_score,
@@ -549,6 +674,131 @@ def wiki_knowledge(json_output: bool = typer.Option(False, "--json", help="Outpu
     else:
         for item in items:
             typer.echo(f"{item['id']} [{item['kind']}] {item['content']}")
+
+
+@wiki_app.command("insights")
+def wiki_insights(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List reflected Wiki insights."""
+    items = [item.model_dump() for item in _memory_core().list_insights()]
+    if json_output:
+        _emit({"insights": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} {item['title']}")
+
+
+@wiki_app.command("consolidate")
+def wiki_consolidate(
+    limit: int = typer.Option(25, "--limit", min=1, max=500),
+    min_evidence: int = typer.Option(2, "--min-evidence", min=1, max=20),
+    project: str | None = typer.Option(None, "--project"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Consolidate evidence into stable Wiki knowledge."""
+    result = _memory_core().consolidate_wiki(
+        WikiConsolidateRequest(limit=limit, minEvidence=min_evidence, project=project),
+    ).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Consolidated semantic={len(result['semantic'])} procedural={len(result['procedural'])}")
+
+
+@wiki_app.command("lessons")
+def wiki_lessons(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """List active lesson knowledge."""
+    items = [item.model_dump() for item in _memory_core().list_knowledge() if item.kind == "lesson" and not item.deleted]
+    if json_output:
+        _emit({"lessons": items}, True)
+    else:
+        for item in items:
+            typer.echo(f"{item['id']} confidence={item['confidence']} {item['content']}")
+
+
+@wiki_app.command("lesson-recall")
+def wiki_lesson_recall(
+    query: str = typer.Argument(..., help="Lesson recall query."),
+    min_confidence: float = typer.Option(0.1, "--min-confidence", min=0.0, max=1.0),
+    project: str | None = typer.Option(None, "--project"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Recall lessons by query."""
+    result = _memory_core().recall_lessons(
+        LessonRecallRequest(query=query, minConfidence=min_confidence, project=project, limit=limit),
+    ).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        for item in result["lessons"]:
+            typer.echo(f"{item['id']} confidence={item['confidence']} {item['content']}")
+
+
+@wiki_app.command("crystallize")
+def wiki_crystallize(
+    source_ids: str = typer.Option(..., "--source-ids", help="Comma-separated source ids."),
+    project: str | None = typer.Option(None, "--project"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Create or update a crystal from source ids."""
+    result = _memory_core().create_crystal(CrystalCreateRequest(sourceIds=_split_csv(source_ids), project=project)).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Crystal: {result['crystal']['id']}")
+
+
+@wiki_app.command("reflect")
+def wiki_reflect(
+    limit: int = typer.Option(25, "--limit", min=1, max=500),
+    project: str | None = typer.Option(None, "--project"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """Generate high-level insights from Wiki knowledge."""
+    result = _memory_core().reflect_wiki(WikiReflectRequest(limit=limit, project=project)).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Insights: {len(result['insights'])} reinforced={result['reinforced']}")
+
+
+@wiki_app.command("lint")
+def wiki_lint(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
+    """Check Wiki knowledge health."""
+    result = _memory_core().lint_wiki().model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Issues: {len(result['issues'])}")
+
+
+@wiki_app.command("file-answer")
+def wiki_file_answer(
+    query: str = typer.Option(..., "--query", help="Original query."),
+    content: str = typer.Option(..., "--content", help="Answer or analysis to file."),
+    kind: str = typer.Option("insight", "--kind", help="semantic, procedural, lesson, crystal, or insight."),
+    source_ids: str | None = typer.Option(None, "--source-ids", help="Comma-separated source ids."),
+    concepts: str | None = typer.Option(None, "--concepts", help="Comma-separated concepts."),
+    confidence: float | None = typer.Option(None, "--confidence", min=0.0, max=1.0),
+    project: str | None = typer.Option(None, "--project"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
+) -> None:
+    """File a high-value query answer into Wiki knowledge."""
+    result = _memory_core().file_wiki_answer(
+        WikiFileAnswerRequest(
+            query=query,
+            content=content,
+            kind=kind,  # type: ignore[arg-type]
+            sourceIds=_split_csv(source_ids),
+            concepts=_split_csv(concepts),
+            confidence=confidence,
+            project=project,
+        ),
+    ).model_dump()
+    if json_output:
+        _emit(result, True)
+    else:
+        typer.echo(f"Filed: {result['record']['id']}")
 
 
 @wiki_app.command("update")

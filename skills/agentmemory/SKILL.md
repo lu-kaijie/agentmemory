@@ -9,6 +9,14 @@ description: AgentMemory 长期记忆使用协议。Use when coding agents need 
 
 ## 会话生命周期
 
+AgentMemory 的主模型是 Global + Project，不要求用户或 agent 必须管理 session。
+
+- Global：跨项目偏好、规则和通用经验。
+- Project：当前项目的画像、Wiki synthesis、知识、经验和 pinned memory。
+- Session：内部 evidence 容器；显式 start/end 只是可选优化。
+
+默认项目识别基于当前工作目录：`realpath(cwd)` 作为 project root，目录名作为 project name，root hash 作为 project id。通常在项目根目录启动 agent 即可，不需要项目本地状态文件。
+
 收到新任务请求后，先用用户请求、项目名、change 名或 agent 归纳的任务目标取一次可注入上下文：
 
 ```bash
@@ -21,7 +29,7 @@ agentmemory context "<当前任务或问题>" --limit 8 --token-budget 1200
 agentmemory session start --project "<project>" --cwd "<cwd>" --json
 ```
 
-工作过程中只在阶段性完成、关键决策或用户纠正方向后低频调用 `observe`。任务结束前优先结束 session，让 AgentMemory 基于本轮 observations 生成会话级 summary：
+工作过程中只在阶段性完成、关键决策或用户纠正方向后低频调用 `observe`。如果没有 session id，AgentMemory 会按当前 project 内部归组。任务结束前可以结束 session，让 AgentMemory 基于本轮 observations 生成会话级 summary：
 
 ```bash
 agentmemory session end \
@@ -54,6 +62,16 @@ agentmemory context "<query>" --limit 8 --token-budget 1200
 ```bash
 agentmemory context "<query>" --limit 8 --token-budget 1200 --json
 ```
+
+JSON context 还包含固定 `sections`：
+
+- `identity`
+- `global`
+- `project`
+- `wiki-synthesis`
+- `lessons-and-crystals`
+- `recent-evidence`
+- `evidence`
 
 需要原始检索列表时用：
 
@@ -88,6 +106,28 @@ REST 兜底：
 - `POST /agentmemory/context`
 - `POST /agentmemory/search`
 - `POST /agentmemory/smart-search`
+
+## Pinned Memory 和 Project Profile
+
+用户明确要求某条规则长期稳定注入 context 时，用 pin：
+
+```bash
+agentmemory pin add --scope global --content "<跨项目规则>" --json
+agentmemory pin add --scope project --content "<当前项目规则>" --json
+```
+
+项目画像用于维护项目目标、技术栈、关键文件、命令、约定和风险。需要刷新项目画像时：
+
+```bash
+agentmemory project profile --update --json
+```
+
+查看已知项目和 pinned memory：
+
+```bash
+agentmemory project list --json
+agentmemory pin list --json
+```
 
 ## 写入记忆
 
@@ -126,27 +166,48 @@ REST 兜底：
 
 ## Wiki 知识库
 
-Wiki 用于浏览和维护由 evidence 沉淀出的长期知识页面。查看页面、任务和 distilled knowledge：
+Wiki 用于维护由 evidence 沉淀出的结构化长期知识。固定 Wiki 页面只是导航入口；LLM consolidation 可以生成 entity、concept、source、comparison、synthesis 等动态页面。优先关注 knowledge、lesson、crystal、insight 是否有来源、是否稳定、是否能复用。查看页面、任务、distilled knowledge 和 insights：
 
 ```bash
 agentmemory wiki pages --json
 agentmemory wiki knowledge --json
+agentmemory wiki insights --json
 agentmemory wiki jobs --json
 ```
 
-处理 pending Wiki 更新或从现有 evidence 重建：
+处理 pending Wiki 更新、consolidation、reflect 或健康检查。`wiki consolidate` 会让 LLM 读取多条 evidence 和已有 records 后判断稳定事实、冲突、陈旧结论、合并和动态页面；`wiki lint` 会让 LLM 判断 contradiction/stale，并补充结构化检查：
 
 ```bash
 agentmemory wiki update --json
+agentmemory wiki consolidate --json
+agentmemory wiki reflect --json
+agentmemory wiki lint --json
 agentmemory wiki rebuild --all --json
+```
+
+需要查找历史经验时：
+
+```bash
+agentmemory wiki lesson-recall "<query>" --json
+```
+
+一次 search/context/smart-search 产生了值得长期保留的分析结论，且有 evidence/source ids 时，可以沉淀回知识层：
+
+```bash
+agentmemory wiki file-answer --query "<query>" --content "<answer>" --source-ids "<sourceType:id>" --json
 ```
 
 REST 兜底：
 
 - `GET /agentmemory/wiki/pages`
 - `GET /agentmemory/wiki/knowledge`
+- `GET /agentmemory/wiki/insights`
 - `GET /agentmemory/wiki/jobs`
 - `POST /agentmemory/wiki/update`
+- `POST /agentmemory/wiki/consolidate`
+- `POST /agentmemory/wiki/reflect`
+- `POST /agentmemory/wiki/lint`
+- `POST /agentmemory/wiki/file-answer`
 - `POST /agentmemory/wiki/rebuild`
 
 ## 治理操作

@@ -33,6 +33,20 @@ class LLMProvider(Protocol):
     def distill_knowledge(self, evidence: list[dict[str, Any]]) -> str:
         ...
 
+    def consolidate_wiki(self, evidence: list[dict[str, Any]], existing: list[dict[str, Any]]) -> str:
+        ...
+
+    def lint_wiki(self, records: list[dict[str, Any]]) -> str:
+        ...
+
+    def update_project_profile(
+        self,
+        project: dict[str, Any],
+        existing: dict[str, Any] | None,
+        evidence: list[dict[str, Any]],
+    ) -> str:
+        ...
+
 
 class EmbeddingProvider(Protocol):
     def status(self) -> ProviderStatus:

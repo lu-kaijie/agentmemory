@@ -41,6 +41,9 @@ def process_observation(
             kind="observation",
             content=summary_content,
             language=observation.language,
+            scope="project",
+            project=observation.project,
+            projectId=observation.projectId,
             createdAt=finished_at,
         )
         candidates = [

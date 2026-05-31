@@ -327,7 +327,8 @@ def test_context_uses_default_durable_sources_and_groups_results(tmp_path):
 
     result = service.context(ContextRequest(query="memory context durable project", limit=10))
 
-    assert result.context.startswith("AgentMemory context:")
+    assert result.context.startswith('<agentmemory-context source="AgentMemory"')
+    assert result.sections
     assert result.evidence
     assert result.confidence > 0
     assert result.compressed is False
@@ -337,7 +338,7 @@ def test_context_uses_default_durable_sources_and_groups_results(tmp_path):
     assert "observation" not in {item["sourceType"] for item in result.evidence}
     first_source = result.evidence[0]["sourceType"]
     assert first_source in {"knowledge", "wikiPage"}
-    assert f"[{first_source}:{result.evidence[0]['sourceId']}]" in result.context
+    assert f"{first_source}:{result.evidence[0]['sourceId']}" in result.context
 
 
 def test_context_uses_relevance_gated_evidence(tmp_path):

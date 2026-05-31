@@ -109,6 +109,24 @@ AgentMemory 第一版定位为本地长期记忆。SQLite 的优点是：
 - 后续迁移到 SQL 表、远程 KV 或服务端存储时，core service 不需要大改。
 - audit、search document 和业务记录可以保持清晰边界。
 
+## Scope 和 Project Identity
+
+长期记忆分为两层：
+
+- `scope=global`：跨项目生效的偏好、规则、lesson、insight。
+- `scope=project`：只属于某个项目的 observation、summary、project memory、Wiki page、knowledge、profile 和 pinned memory。
+
+Project 是一等实体 `ProjectRecord`，包含 `id`、`name`、`root`、`aliases`、`metadata`、`createdAt` 和 `updatedAt`。
+
+默认识别方式：
+
+1. 使用请求传入的 `cwd`，没有则使用进程当前目录。
+2. 对 `cwd` 做 `realpath`，得到稳定 root。
+3. `name = basename(root)`，除非请求显式传入 project。
+4. `id = sha256(root)[:24]` 加 `proj_` 前缀，避免同名目录冲突。
+
+系统不依赖项目目录里的状态文件。这样即使 agent 被直接关闭，也不会因为文件状态未更新导致 session 失真。Session 只作为内部 evidence 容器；`observe` 没有传 `sessionId` 时，会按 project current active session + TTL 尽力归组，过期则创建新 session。
+
 ## Provider 设计
 
 LLM 和 embedding 都采用 OpenAI-compatible provider。
@@ -203,7 +221,9 @@ AgentMemory 的 RAG 是“记忆证据 RAG”，不是代码仓库全文 RAG。
 - `content`
 - `searchableText`
 - `language`
+- `scope`
 - `project`
+- `projectId`
 - `files`
 - `concepts`
 - `createdAt`
@@ -238,7 +258,7 @@ AgentMemory 的 RAG 是“记忆证据 RAG”，不是代码仓库全文 RAG。
 2. LanceDB 召回语义结果。
 3. 根据 `sourceId` 去重。
 4. 对同时命中 keyword 和 vector 的结果加权。
-5. 应用 `sourceTypes`、`project`、`language`、`minScore` 等过滤。
+5. 应用 `sourceTypes`、`scope`、`project`、`projectId`、`sessionId`、`language`、`minScore` 等过滤。
 6. 返回带 `matchSources` 的结构化结果。
 
 `matchSources` 用于告诉 agent：结果来自关键词、向量，还是两者都有。
@@ -259,7 +279,7 @@ AgentMemory 的 RAG 是“记忆证据 RAG”，不是代码仓库全文 RAG。
 
 `agentmemory context "<query>"` 面向 agent prompt 注入。
 
-默认 source types 偏向稳定知识：
+默认 context 是 project scope：检索时包含 global records 和当前 project records。默认 source types 偏向稳定知识：
 
 - wikiPage
 - knowledge
@@ -269,8 +289,20 @@ AgentMemory 的 RAG 是“记忆证据 RAG”，不是代码仓库全文 RAG。
 
 context 输出分两种：
 
-- 默认文本：带 `<agentmemory-context>` 包裹，可直接放入 prompt。
-- `--json`：返回 `context`、`evidence`、`wikiPages`、`knowledge`、`memories`、`confidence`、`compressed`。
+- 默认文本：带 `<agentmemory-context>` 包裹，并固定输出 sections，可直接放入 prompt。
+- `--json`：返回 `context`、`sections`、`project`、`evidence`、`wikiPages`、`knowledge`、`memories`、`confidence`、`compressed`。
+
+固定 sections：
+
+- `identity`
+- `global`
+- `project`
+- `wiki-synthesis`
+- `lessons-and-crystals`
+- `recent-evidence`
+- `evidence`
+
+Pinned memory 和 project profile 优先进入 `global` / `project` section。Wiki synthesis、lesson、crystal、insight 进入稳定知识 section。原始 evidence 保留 source ids、score 和 matchSources，便于 agent 核查。
 
 当内容超过 token budget：
 
@@ -338,9 +370,23 @@ knowledge 写入前会生成 fingerprint。
 
 这样能避免 Wiki rebuild 或多 topic update 带来大量重复 knowledge。
 
+### Consolidation 和生命周期
+
+LLM Wiki 不只在单条 evidence 写入时更新页面，还会周期性对 summaries、memories 和已有 knowledge 做 consolidation。Consolidation 要求 LLM provider：系统会让 LLM 读取 evidence、已有 knowledge、insights 和 Wiki pages，再输出结构化 knowledge、动态页面和 lint issues。LLM 不可用时返回明确错误，不用关键词规则伪造 consolidation。
+
+- 多条 evidence 支撑同一结论时，沉淀或强化 semantic knowledge。
+- 重复出现的流程会沉淀或强化 procedural knowledge。
+- lesson 支持 recall、strengthen、decay 和 soft delete。
+- crystal 使用 source group 作为稳定边界，避免重复生成同一组 evidence 的阶段性摘要。
+- reflect 会从 semantic、procedural、lesson、crystal 中归纳 insight。
+- query filing 可以把高价值问答沉淀为 insight、knowledge 或 crystal。
+- LLM consolidation 可以判断 stable facts、merge candidates、contradiction 和 stale claims。
+
+这些机制让知识层持续复利，而不是每次查询都从 raw evidence 重新归纳。
+
 ### Wiki Page 聚合
 
-第一版使用固定 topic：
+当前版本保留固定 topic 作为导航和可读聚合入口：
 
 - personal_preferences
 - project_overview
@@ -355,6 +401,14 @@ knowledge 写入前会生成 fingerprint。
 - agent 更容易知道去哪里找稳定知识。
 - Viewer 展示更简单。
 - context packing 可以优先使用稳定入口。
+
+固定 topic 不是 LLM Wiki 的本质。系统还支持动态 Wiki page：`entity`、`concept`、`source`、`comparison`、`synthesis`。动态页由 LLM consolidation 创建，使用 `type + slug` 复用更新，并带有 parent topic 方便导航。动态页会进入 search/context，title、type、slug、parent topic 和 content 都可检索。
+
+`wiki lint` 同样要求 LLM 判断 contradiction/stale，再追加 deterministic checks：
+
+- knowledge 缺少 sourceIds：missing_source。
+- knowledge confidence 过低：low_confidence。
+- Wiki page 缺少 sourceIds：orphan。
 
 Wiki update job 包含：
 

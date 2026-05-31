@@ -62,6 +62,70 @@ def parse_knowledge_xml(content: str) -> list[dict[str, Any]]:
     return records
 
 
+def parse_wiki_consolidation_xml(content: str) -> dict[str, list[dict[str, Any]]]:
+    return {
+        "knowledge": parse_knowledge_xml(content),
+        "pages": parse_dynamic_pages_xml(content),
+        "issues": parse_lint_xml(content),
+    }
+
+
+def parse_dynamic_pages_xml(content: str) -> list[dict[str, Any]]:
+    pages: list[dict[str, Any]] = []
+    for match in re.finditer(r"<page\b([^>]*)>([\s\S]*?)</page>", content, re.IGNORECASE):
+        attrs = match.group(1)
+        body = match.group(2)
+        page_type = _attr_value(attrs, "type") or "synthesis"
+        if page_type not in ("entity", "concept", "source", "comparison", "synthesis", "topic"):
+            continue
+        title = _attr_value(attrs, "title") or "Untitled"
+        topic = _attr_value(attrs, "topic") or "project_overview"
+        if topic not in WIKI_TOPICS:
+            topic = "project_overview"
+        page_content = _tag_text(body, "content") or body.strip()
+        if not page_content:
+            continue
+        pages.append(
+            {
+                "type": page_type,
+                "title": title,
+                "topic": topic,
+                "slug": _attr_value(attrs, "slug") or _slugify(title),
+                "content": page_content,
+                "confidence": _coerce_confidence(_attr_value(attrs, "confidence")),
+                "sourceIds": _csv_values(_tag_text(body, "sourceIds")),
+                "concepts": _csv_values(_tag_text(body, "concepts")),
+            },
+        )
+    return pages
+
+
+def parse_lint_xml(content: str) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for match in re.finditer(r"<issue\b([^>]*)>([\s\S]*?)</issue>", content, re.IGNORECASE):
+        attrs = match.group(1)
+        body = match.group(2)
+        issue_type = _attr_value(attrs, "type")
+        if issue_type not in ("contradiction", "stale", "low_confidence", "missing_source", "orphan"):
+            continue
+        severity = _attr_value(attrs, "severity") or "warning"
+        if severity not in ("info", "warning", "error"):
+            severity = "warning"
+        message = _tag_text(body, "message") or body.strip()
+        if not message:
+            continue
+        issues.append(
+            {
+                "type": issue_type,
+                "severity": severity,
+                "message": message,
+                "sourceIds": _csv_values(_tag_text(body, "sourceIds")),
+                "suggestedAction": _tag_text(body, "suggestedAction") or "",
+            },
+        )
+    return issues
+
+
 def _attr_value(attrs: str, name: str) -> str | None:
     match = re.search(rf'\b{re.escape(name)}="([^"]*)"', attrs, re.IGNORECASE)
     return match.group(1).strip() if match else None
@@ -86,3 +150,8 @@ def _csv_values(content: str | None) -> list[str]:
     if not content:
         return []
     return [item.strip() for item in content.split(",") if item.strip()]
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^\w\u4e00-\u9fff]+", "-", value.strip().casefold()).strip("-")
+    return slug[:80] or "page"

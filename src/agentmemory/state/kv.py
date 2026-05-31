@@ -43,6 +43,16 @@ class StateKV:
 
     def _ensure_fts5(self) -> None:
         with self.engine.begin() as connection:
+            existing = connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='search_fts'"),
+            ).scalar_one_or_none()
+            if existing:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(text("PRAGMA table_info(search_fts)")).mappings()
+                }
+                if "scope" not in columns or "project_id" not in columns:
+                    connection.execute(text("DROP TABLE search_fts"))
             connection.execute(
                 text(
                     """
@@ -54,7 +64,9 @@ class StateKV:
                         content,
                         searchable_text,
                         language UNINDEXED,
+                        scope UNINDEXED,
                         project UNINDEXED,
+                        project_id UNINDEXED,
                         files UNINDEXED,
                         concepts UNINDEXED,
                         created_at UNINDEXED
@@ -140,7 +152,9 @@ class StateKV:
                         content,
                         searchable_text,
                         language,
+                        scope,
                         project,
+                        project_id,
                         files,
                         concepts,
                         created_at
@@ -153,7 +167,9 @@ class StateKV:
                         :content,
                         :searchable_text,
                         :language,
+                        :scope,
                         :project,
+                        :project_id,
                         :files,
                         :concepts,
                         :created_at
@@ -168,7 +184,9 @@ class StateKV:
                     "content": document["content"],
                     "searchable_text": document["searchableText"],
                     "language": document["language"],
+                    "scope": document.get("scope") or "global",
                     "project": document.get("project"),
+                    "project_id": document.get("projectId"),
                     "files": json.dumps(document.get("files", []), ensure_ascii=False),
                     "concepts": json.dumps(document.get("concepts", []), ensure_ascii=False),
                     "created_at": document["createdAt"],
@@ -203,7 +221,9 @@ class StateKV:
                         content,
                         searchable_text,
                         language,
+                        scope,
                         project,
+                        project_id,
                         files,
                         concepts,
                         created_at,
@@ -225,7 +245,9 @@ class StateKV:
                     "content": row["content"],
                     "searchableText": row["searchable_text"],
                     "language": row["language"],
+                    "scope": row["scope"] or "global",
                     "project": row["project"],
+                    "projectId": row["project_id"],
                     "files": json.loads(row["files"] or "[]"),
                     "concepts": json.loads(row["concepts"] or "[]"),
                     "createdAt": row["created_at"],

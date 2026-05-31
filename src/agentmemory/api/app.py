@@ -13,13 +13,20 @@ from agentmemory.core.models import (
     ContextRequest,
     ForgetRequest,
     GovernanceImportRequest,
+    CrystalCreateRequest,
+    LessonRecallRequest,
     MaintenanceRunRequest,
     ObserveRequest,
+    PinMemoryRequest,
+    ProjectProfileUpdateRequest,
     RememberRequest,
     SearchRequest,
     SessionEndRequest,
     SessionStartRequest,
     SmartSearchRequest,
+    WikiConsolidateRequest,
+    WikiFileAnswerRequest,
+    WikiReflectRequest,
     WikiRebuildRequest,
     WikiUpdateRequest,
 )
@@ -135,6 +142,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         items = app.state.memory_core.list_sessions()
         return {"sessions": [item.model_dump() for item in items]}
 
+    @app.get("/agentmemory/projects")
+    def projects() -> dict[str, object]:
+        items = app.state.memory_core.list_projects()
+        return {"projects": [item.model_dump() for item in items]}
+
+    @app.post("/agentmemory/project/profile/update")
+    def project_profile_update(payload: ProjectProfileUpdateRequest) -> dict[str, object]:
+        return app.state.memory_core.update_project_profile(payload).model_dump()
+
+    @app.get("/agentmemory/project/profile/{project_id}")
+    def project_profile(project_id: str) -> dict[str, object]:
+        project = app.state.memory_core.get_project(project_id)
+        profile = app.state.memory_core.project_profile(project_id)
+        return {
+            "project": project.model_dump() if project else None,
+            "profile": profile.model_dump() if profile else None,
+        }
+
+    @app.post("/agentmemory/pins")
+    def pin_memory(payload: PinMemoryRequest) -> dict[str, object]:
+        return app.state.memory_core.pin_memory(payload).model_dump()
+
+    @app.get("/agentmemory/pins")
+    def pins() -> dict[str, object]:
+        items = app.state.memory_core.list_pinned_memory()
+        return {"pinnedMemory": [item.model_dump() for item in items]}
+
+    @app.post("/agentmemory/pins/{pin_id}/disable")
+    def pin_disable(pin_id: str) -> dict[str, object]:
+        return {"pinned": app.state.memory_core.disable_pinned_memory(pin_id).model_dump()}
+
+    @app.delete("/agentmemory/pins/{pin_id}")
+    def pin_delete(pin_id: str) -> dict[str, object]:
+        return {"deleted": app.state.memory_core.delete_pinned_memory(pin_id), "pinId": pin_id}
+
     @app.get("/agentmemory/memories")
     def memories() -> dict[str, object]:
         items = app.state.memory_core.list_memories()
@@ -193,6 +235,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         items = app.state.memory_core.list_knowledge()
         return {"knowledge": [item.model_dump() for item in items]}
 
+    @app.get("/agentmemory/wiki/insights")
+    def wiki_insights() -> dict[str, object]:
+        items = app.state.memory_core.list_insights()
+        return {"insights": [item.model_dump() for item in items]}
+
     @app.post("/agentmemory/wiki/update")
     def wiki_update(payload: WikiUpdateRequest | None = None) -> dict[str, object]:
         return app.state.memory_core.process_wiki_updates(payload or WikiUpdateRequest()).model_dump()
@@ -200,6 +247,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/agentmemory/wiki/rebuild")
     def wiki_rebuild(payload: WikiRebuildRequest) -> dict[str, object]:
         return app.state.memory_core.rebuild_wiki(payload).model_dump()
+
+    @app.post("/agentmemory/wiki/consolidate")
+    def wiki_consolidate(payload: WikiConsolidateRequest | None = None) -> dict[str, object]:
+        return app.state.memory_core.consolidate_wiki(payload or WikiConsolidateRequest()).model_dump()
+
+    @app.post("/agentmemory/wiki/lesson-recall")
+    def wiki_lesson_recall(payload: LessonRecallRequest) -> dict[str, object]:
+        return app.state.memory_core.recall_lessons(payload).model_dump()
+
+    @app.post("/agentmemory/wiki/crystallize")
+    def wiki_crystallize(payload: CrystalCreateRequest) -> dict[str, object]:
+        return app.state.memory_core.create_crystal(payload).model_dump()
+
+    @app.post("/agentmemory/wiki/reflect")
+    def wiki_reflect(payload: WikiReflectRequest | None = None) -> dict[str, object]:
+        return app.state.memory_core.reflect_wiki(payload or WikiReflectRequest()).model_dump()
+
+    @app.post("/agentmemory/wiki/lint")
+    def wiki_lint() -> dict[str, object]:
+        return app.state.memory_core.lint_wiki().model_dump()
+
+    @app.post("/agentmemory/wiki/file-answer")
+    def wiki_file_answer(payload: WikiFileAnswerRequest) -> dict[str, object]:
+        return app.state.memory_core.file_wiki_answer(payload).model_dump()
 
     @app.post("/agentmemory/maintenance/run")
     def maintenance_run(payload: MaintenanceRunRequest | None = None, envelope: bool = False) -> dict[str, object]:

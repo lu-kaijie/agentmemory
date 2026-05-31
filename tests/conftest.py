@@ -92,6 +92,55 @@ class StubLLMProvider:
             "</knowledge>"
         )
 
+    def consolidate_wiki(self, evidence: list[dict[str, Any]], existing: list[dict[str, Any]]) -> str:
+        return (
+            "<consolidation>"
+            "<knowledge>"
+            '<item kind="semantic" confidence="0.91">'
+            "<content>Strong LLM semantic consolidation.</content>"
+            "<concepts>wiki,llm</concepts>"
+            "</item>"
+            '<item kind="procedural" confidence="0.86">'
+            "<content>Strong LLM procedural consolidation.</content>"
+            "</item>"
+            "</knowledge>"
+            '<page type="concept" title="LLM Wiki Consolidation" slug="llm-wiki-consolidation" topic="project_overview" confidence="0.88">'
+            "<content>Dynamic page from strong LLM consolidation.</content>"
+            "<sourceIds>memory:mem_stub</sourceIds>"
+            "<concepts>wiki,llm</concepts>"
+            "</page>"
+            '<issue type="stale" severity="warning">'
+            "<message>Stub stale issue</message>"
+            "<sourceIds>knowledge:old</sourceIds>"
+            "<suggestedAction>Review stale claim.</suggestedAction>"
+            "</issue>"
+            "</consolidation>"
+        )
+
+    def lint_wiki(self, records: list[dict[str, Any]]) -> str:
+        return (
+            "<issues>"
+            '<issue type="contradiction" severity="warning">'
+            "<message>Stub contradiction detected by LLM lint.</message>"
+            "<sourceIds>knowledge:a,knowledge:b</sourceIds>"
+            "<suggestedAction>Resolve the conflicting claims.</suggestedAction>"
+            "</issue>"
+            "</issues>"
+        )
+
+    def update_project_profile(
+        self,
+        project: dict[str, Any],
+        existing: dict[str, Any] | None,
+        evidence: list[dict[str, Any]],
+    ) -> str:
+        return (
+            '{"content":"Stub project profile","goals":["test AgentMemory"],'
+            '"techStack":["python"],"keyFiles":["src/agentmemory/core/service.py"],'
+            '"commands":["uv run pytest"],"conventions":["use scoped context"],'
+            '"risks":["stale evidence"],"confidence":0.9}'
+        )
+
 
 class StubEmbeddingProvider:
     def __init__(self, fail: bool = False):

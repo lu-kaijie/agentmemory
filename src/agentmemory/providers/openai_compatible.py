@@ -145,6 +145,89 @@ class OpenAICompatibleLLMProvider:
             "distill_knowledge",
         )
 
+    def consolidate_wiki(self, evidence: list[dict[str, Any]], existing: list[dict[str, Any]]) -> str:
+        return self._complete(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the AgentMemory LLM Wiki maintainer. Read all evidence and existing records. "
+                        "Do strong synthesis: identify stable facts, recurring procedures, lessons, crystals, "
+                        "contradictions, stale claims, and dynamic wiki pages. Do not merely group by keywords. "
+                        "Merge equivalent claims, flag conflicts, and create entity/concept/source/comparison/synthesis pages when useful.\n"
+                        "Return only XML-like output:\n"
+                        "<consolidation>\n"
+                        "<knowledge>\n"
+                        '<item kind="semantic" confidence="0.9"><content>Stable fact supported by multiple sources.</content><concepts>a,b</concepts></item>\n'
+                        '<item kind="procedural" confidence="0.8"><content>Reusable procedure.</content></item>\n'
+                        '<item kind="lesson" confidence="0.8"><content>Lesson.</content></item>\n'
+                        '<item kind="crystal" confidence="0.8"><content>Digest.</content></item>\n'
+                        "</knowledge>\n"
+                        '<page type="concept" title="Concept name" slug="concept-name" topic="project_overview" confidence="0.8">\n'
+                        "<content>Durable page content with cross-references by source id.</content>\n"
+                        "<sourceIds>memory:mem_x,summary:sum_y</sourceIds>\n"
+                        "<concepts>concept</concepts>\n"
+                        "</page>\n"
+                        '<issue type="contradiction" severity="warning"><message>Conflict description.</message><sourceIds>a,b</sourceIds><suggestedAction>Review.</suggestedAction></issue>\n'
+                        "</consolidation>\n"
+                        "Allowed page types: entity, concept, source, comparison, synthesis, topic. "
+                        "Allowed issue types: contradiction, stale, low_confidence, missing_source, orphan. "
+                        "If nothing useful exists, output <consolidation/>."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps({"evidence": evidence, "existing": existing}, ensure_ascii=False),
+                },
+            ],
+            "consolidate_wiki",
+        )
+
+    def lint_wiki(self, records: list[dict[str, Any]]) -> str:
+        return self._complete(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are linting an AgentMemory LLM Wiki. Detect contradictions, stale claims, low-confidence records, "
+                        "missing provenance, and orphan pages. Return only XML-like issues:\n"
+                        '<issues><issue type="stale" severity="warning"><message>...</message><sourceIds>...</sourceIds><suggestedAction>...</suggestedAction></issue></issues>\n'
+                        "Allowed issue types: contradiction, stale, low_confidence, missing_source, orphan. "
+                        "If no issues, output <issues/>."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(records, ensure_ascii=False)},
+            ],
+            "lint_wiki",
+        )
+
+    def update_project_profile(
+        self,
+        project: dict[str, Any],
+        existing: dict[str, Any] | None,
+        evidence: list[dict[str, Any]],
+    ) -> str:
+        return self._complete(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Update the AgentMemory project profile from evidence. "
+                        "Return only a JSON object with keys: content, goals, techStack, keyFiles, "
+                        "commands, conventions, risks, confidence. Keep content concise and evidence-grounded."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"project": project, "existing": existing, "evidence": evidence},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "update_project_profile",
+        )
+
     def _complete(self, messages: list[dict[str, str]], operation: str) -> str:
         try:
             response = self.client.chat.completions.create(model=self.model, messages=messages)

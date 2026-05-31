@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+from datetime import datetime, timedelta, UTC
 
 from agentmemory.core.ids import generate_id, utc_now_iso
 from agentmemory.core.models import (
@@ -14,15 +15,26 @@ from agentmemory.core.models import (
     GovernanceImportRequest,
     GovernanceImportResponse,
     IndexJobRecord,
+    InsightRecord,
     KnowledgeRecord,
+    LessonRecallRequest,
+    LessonRecallResponse,
     LLMProcessingJobRecord,
     MaintenanceRunRequest,
     MaintenanceRunResponse,
     MemoryCandidateRecord,
     MemoryRecord,
+    MemoryScope,
     ObserveRequest,
     ObserveResponse,
     ObservationRecord,
+    PinnedMemoryRecord,
+    PinMemoryRequest,
+    PinMemoryResponse,
+    ProjectProfileRecord,
+    ProjectProfileUpdateRequest,
+    ProjectProfileUpdateResponse,
+    ProjectRecord,
     RememberRequest,
     RememberResponse,
     SessionEndRequest,
@@ -32,7 +44,17 @@ from agentmemory.core.models import (
     SessionStartResponse,
     SummaryRecord,
     WIKI_TOPICS,
+    CrystalCreateRequest,
+    CrystalCreateResponse,
+    WikiConsolidateRequest,
+    WikiConsolidateResponse,
+    WikiFileAnswerRequest,
+    WikiFileAnswerResponse,
+    WikiLintIssue,
+    WikiLintResponse,
     WikiPageRecord,
+    WikiReflectRequest,
+    WikiReflectResponse,
     WikiRebuildRequest,
     WikiTopic,
     WikiUpdateJobRecord,
@@ -40,15 +62,17 @@ from agentmemory.core.models import (
     WikiUpdateResponse,
 )
 from agentmemory.core.processing import create_running_job, process_observation
-from agentmemory.core.search import MemorySearchService, knowledge_document, memory_document, observation_document, summary_document, wiki_page_document
-from agentmemory.core.wiki import WIKI_TITLES, parse_knowledge_xml, parse_wiki_update_xml
+from agentmemory.core.scope import resolve_project_identity
+from agentmemory.core.search import MemorySearchService, insight_document, knowledge_document, memory_document, observation_document, summary_document, wiki_page_document
+from agentmemory.core.wiki import WIKI_TITLES, parse_knowledge_xml, parse_lint_xml, parse_wiki_consolidation_xml, parse_wiki_update_xml
 from agentmemory.providers import LLMProvider
 from agentmemory.state import StateKV
 from agentmemory.state.schema import KV
 from agentmemory.version import __version__
 
 
-GOVERNANCE_SCHEMA_VERSION = 1
+GOVERNANCE_SCHEMA_VERSION = 2
+DEFAULT_SESSION_TTL_MINUTES = 720
 
 
 class MemoryNotFoundError(ValueError):
@@ -70,12 +94,14 @@ class MemoryCoreService:
 
     def observe(self, request: ObserveRequest) -> ObserveResponse:
         now = utc_now_iso()
-        session_id = request.sessionId or generate_id("ses")
+        project = self._resolve_project_record(request.cwd, request.project, request.projectId)
+        session_id = request.sessionId or self._current_project_session_id(project, now)
         existing = self.kv.get(KV.sessions, session_id)
         if existing:
             session = SessionRecord.model_validate(existing)
-            session.project = request.project or session.project
-            session.cwd = request.cwd or session.cwd
+            session.project = project.name
+            session.projectId = project.id
+            session.cwd = project.root
             session.updatedAt = now
             session.observationCount += 1
             session.status = "active"
@@ -83,8 +109,9 @@ class MemoryCoreService:
         else:
             session = SessionRecord(
                 id=session_id,
-                project=request.project,
-                cwd=request.cwd,
+                project=project.name,
+                projectId=project.id,
+                cwd=project.root,
                 startedAt=now,
                 updatedAt=now,
                 observationCount=1,
@@ -97,14 +124,16 @@ class MemoryCoreService:
             content=request.content,
             source=request.source,
             language=request.language,
-            project=request.project,
-            cwd=request.cwd,
+            project=project.name,
+            projectId=project.id,
+            cwd=project.root,
             files=request.files,
             concepts=request.concepts,
             createdAt=now,
         )
 
         self.kv.set(KV.sessions, session.id, session.model_dump())
+        self.kv.set(KV.project_current_sessions, project.id, {"sessionId": session.id, "updatedAt": now})
         self.kv.set(KV.observations(session.id), observation.id, observation.model_dump())
         self._enqueue_wiki_job([f"observation:{observation.id}"])
         if self.search_service:
@@ -167,25 +196,29 @@ class MemoryCoreService:
 
     def start_session(self, request: SessionStartRequest) -> SessionStartResponse:
         now = utc_now_iso()
+        project = self._resolve_project_record(request.cwd, request.project, request.projectId)
         session_id = request.sessionId or generate_id("ses")
         existing = self.kv.get(KV.sessions, session_id)
         if existing:
             session = SessionRecord.model_validate(existing)
-            session.project = request.project or session.project
-            session.cwd = request.cwd or session.cwd
+            session.project = project.name
+            session.projectId = project.id
+            session.cwd = project.root
             session.updatedAt = now
             session.status = "active"
             session.endedAt = None
         else:
             session = SessionRecord(
                 id=session_id,
-                project=request.project,
-                cwd=request.cwd,
+                project=project.name,
+                projectId=project.id,
+                cwd=project.root,
                 startedAt=now,
                 updatedAt=now,
                 observationCount=0,
             )
         self.kv.set(KV.sessions, session.id, session.model_dump())
+        self.kv.set(KV.project_current_sessions, project.id, {"sessionId": session.id, "updatedAt": now})
         self._record_audit(
             AuditRecord(
                 id=generate_id("aud"),
@@ -194,28 +227,31 @@ class MemoryCoreService:
                 targetId=session.id,
                 source=request.source,
                 timestamp=now,
-                details={"project": session.project, "cwd": session.cwd},
+                details={"project": session.project, "projectId": session.projectId, "cwd": session.cwd},
             ),
         )
         return SessionStartResponse(sessionId=session.id, session=session)
 
     def end_session(self, request: SessionEndRequest) -> SessionEndResponse:
         now = utc_now_iso()
+        project = self._resolve_project_record(request.cwd, request.project, request.projectId)
         raw = self.kv.get(KV.sessions, request.sessionId)
         session = (
             SessionRecord.model_validate(raw)
             if raw
             else SessionRecord(
                 id=request.sessionId,
-                project=request.project,
-                cwd=request.cwd,
+                project=project.name,
+                projectId=project.id,
+                cwd=project.root,
                 startedAt=now,
                 updatedAt=now,
                 observationCount=0,
             )
         )
-        session.project = request.project or session.project
-        session.cwd = request.cwd or session.cwd
+        session.project = project.name
+        session.projectId = project.id
+        session.cwd = project.root
         session.status = "ended"
         session.endedAt = now
         session.updatedAt = now
@@ -239,6 +275,9 @@ class MemoryCoreService:
                     kind="session",
                     content=summary_text,
                     language=request.language,
+                    scope="project",
+                    project=session.project,
+                    projectId=session.projectId,
                     createdAt=now,
                 )
                 self.kv.set(KV.summaries, summary.id, summary.model_dump())
@@ -250,6 +289,7 @@ class MemoryCoreService:
                 error = str(exc)
 
         self.kv.set(KV.sessions, session.id, session.model_dump())
+        self.kv.delete(KV.project_current_sessions, project.id)
         self._record_audit(
             AuditRecord(
                 id=generate_id("aud"),
@@ -269,6 +309,7 @@ class MemoryCoreService:
 
     def remember(self, request: RememberRequest) -> RememberResponse:
         now = utc_now_iso()
+        project = self._resolve_project_record(project=request.project, project_id=request.projectId) if request.scope == "project" else None
         memory = MemoryRecord(
             id=generate_id("mem"),
             type=request.type,
@@ -280,6 +321,9 @@ class MemoryCoreService:
             canonicalId=request.canonicalId,
             duplicateOf=request.duplicateOf,
             relations=request.relations,
+            scope=request.scope,
+            project=project.name if project else request.project,
+            projectId=project.id if project else request.projectId,
             createdAt=now,
         )
         self.kv.set(KV.memories, memory.id, memory.model_dump())
@@ -302,6 +346,14 @@ class MemoryCoreService:
     def list_sessions(self) -> list[SessionRecord]:
         items = [SessionRecord.model_validate(item) for item in self.kv.list(KV.sessions)]
         return sorted(items, key=lambda item: item.updatedAt)
+
+    def list_projects(self) -> list[ProjectRecord]:
+        items = [ProjectRecord.model_validate(item) for item in self.kv.list(KV.projects)]
+        return sorted(items, key=lambda item: item.updatedAt)
+
+    def get_project(self, project_id: str) -> ProjectRecord | None:
+        raw = self.kv.get(KV.projects, project_id)
+        return ProjectRecord.model_validate(raw) if raw else None
 
     def list_memories(self) -> list[MemoryRecord]:
         items = [MemoryRecord.model_validate(item) for item in self.kv.list(KV.memories)]
@@ -340,13 +392,95 @@ class MemoryCoreService:
         items = [KnowledgeRecord.model_validate(item) for item in self.kv.list(KV.knowledge)]
         return sorted(items, key=lambda item: item.updatedAt)
 
+    def list_insights(self) -> list[InsightRecord]:
+        items = [InsightRecord.model_validate(item) for item in self.kv.list(KV.insights)]
+        return sorted(items, key=lambda item: item.updatedAt)
+
     def list_wiki_jobs(self) -> list[WikiUpdateJobRecord]:
         items = [WikiUpdateJobRecord.model_validate(item) for item in self.kv.list(KV.wiki_update_jobs)]
         return sorted(items, key=lambda item: item.createdAt)
 
+    def list_pinned_memory(self, scope: MemoryScope | None = None, project_id: str | None = None) -> list[PinnedMemoryRecord]:
+        items = [PinnedMemoryRecord.model_validate(item) for item in self.kv.list(KV.pinned_memory)]
+        filtered = [
+            item
+            for item in items
+            if (scope is None or item.scope == scope)
+            and (project_id is None or item.projectId == project_id)
+        ]
+        return sorted(filtered, key=lambda item: (item.priority, item.updatedAt), reverse=True)
+
+    def list_project_profiles(self) -> list[ProjectProfileRecord]:
+        items = [ProjectProfileRecord.model_validate(item) for item in self.kv.list(KV.project_profiles)]
+        return sorted(items, key=lambda item: item.updatedAt)
+
+    def project_profile(self, project_id: str) -> ProjectProfileRecord | None:
+        raw = self.kv.get(KV.project_profiles, project_id)
+        return ProjectProfileRecord.model_validate(raw) if raw else None
+
+    def pin_memory(self, request: PinMemoryRequest) -> PinMemoryResponse:
+        now = utc_now_iso()
+        project = self._resolve_project_record(project=request.project, project_id=request.projectId) if request.scope == "project" else None
+        pinned = PinnedMemoryRecord(
+            id=generate_id("pin"),
+            scope=request.scope,
+            project=project.name if project else None,
+            projectId=project.id if project else None,
+            content=request.content,
+            sourceIds=request.sourceIds,
+            priority=request.priority,
+            confidence=request.confidence,
+            createdAt=now,
+            updatedAt=now,
+        )
+        self.kv.set(KV.pinned_memory, pinned.id, pinned.model_dump())
+        return PinMemoryResponse(pinned=pinned)
+
+    def disable_pinned_memory(self, pin_id: str) -> PinnedMemoryRecord:
+        raw = self.kv.get(KV.pinned_memory, pin_id)
+        if not raw:
+            raise ValueError(f"pinned memory not found: {pin_id}")
+        pinned = PinnedMemoryRecord.model_validate(raw)
+        pinned.enabled = False
+        pinned.updatedAt = utc_now_iso()
+        self.kv.set(KV.pinned_memory, pinned.id, pinned.model_dump())
+        return pinned
+
+    def delete_pinned_memory(self, pin_id: str) -> bool:
+        return self.kv.delete(KV.pinned_memory, pin_id)
+
+    def update_project_profile(self, request: ProjectProfileUpdateRequest) -> ProjectProfileUpdateResponse:
+        if not self.llm or not hasattr(self.llm, "update_project_profile"):
+            raise RuntimeError("project profile update requires an llm provider")
+        project = self._resolve_project_record(request.cwd, request.project, request.projectId)
+        existing = self.project_profile(project.id)
+        evidence = self._project_profile_evidence(project.id, request.limit)
+        raw = self.llm.update_project_profile(project.model_dump(), existing.model_dump() if existing else None, evidence)  # type: ignore[union-attr]
+        parsed = _parse_project_profile_text(raw)
+        now = utc_now_iso()
+        profile = ProjectProfileRecord(
+            id=project.id,
+            projectId=project.id,
+            project=project.name,
+            content=parsed["content"],
+            goals=parsed["goals"],
+            techStack=parsed["techStack"],
+            keyFiles=parsed["keyFiles"],
+            commands=parsed["commands"],
+            conventions=parsed["conventions"],
+            risks=parsed["risks"],
+            sourceIds=_dedupe_strings([str(item.get("sourceId")) for item in evidence if item.get("sourceId")]),
+            confidence=parsed["confidence"],
+            createdAt=existing.createdAt if existing else now,
+            updatedAt=now,
+        )
+        self.kv.set(KV.project_profiles, project.id, profile.model_dump())
+        return ProjectProfileUpdateResponse(project=project, profile=profile)
+
     def process_wiki_updates(self, request: WikiUpdateRequest | None = None) -> WikiUpdateResponse:
         if not self.llm:
             raise RuntimeError("llm provider is not configured")
+        request = request or WikiUpdateRequest()
         limit = request.limit if request else 10
         pending = [
             WikiUpdateJobRecord.model_validate(item)
@@ -357,6 +491,11 @@ class MemoryCoreService:
         pages: list[WikiPageRecord] = []
         knowledge: list[KnowledgeRecord] = []
         for job in sorted(pending, key=lambda item: item.createdAt)[:limit]:
+            if request.project or request.projectId:
+                project = self._resolve_project_record(project=request.project, project_id=request.projectId)
+                job.project = project.name
+                job.projectId = project.id
+                job.scope = request.scope
             processed, page, distilled = self._process_wiki_job(job)
             jobs.append(processed)
             if page:
@@ -415,7 +554,17 @@ class MemoryCoreService:
             *(f"summary:{item.id}" for item in self.list_summaries()),
         ]
         source_ids = self._uncovered_wiki_source_ids(source_ids)
-        jobs = [self._enqueue_wiki_job(source_ids, topic=topic) for topic in topics]
+        project = self._resolve_project_record(project=request.project, project_id=request.projectId) if request.scope == "project" else None
+        jobs = [
+            self._enqueue_wiki_job(
+                source_ids,
+                topic=topic,
+                scope=request.scope,
+                project=project.name if project else None,
+                project_id=project.id if project else None,
+            )
+            for topic in topics
+        ]
         if not self.llm:
             return WikiUpdateResponse(jobs=jobs, pages=[])
         processed: list[WikiUpdateJobRecord] = []
@@ -456,6 +605,7 @@ class MemoryCoreService:
 
     def export_data(self, source: str = "cli") -> GovernanceExport:
         now = utc_now_iso()
+        projects = self.list_projects()
         sessions = self.list_sessions()
         observations = self.list_observations()
         memories = self.list_memories()
@@ -463,6 +613,7 @@ class MemoryCoreService:
         memory_candidates = self.list_memory_candidates()
         llm_processing_jobs = self.list_llm_processing_jobs()
         knowledge = self.list_knowledge()
+        insights = self.list_insights()
         index_jobs = self.list_index_jobs()
         audit = AuditRecord(
             id=generate_id("aud"),
@@ -473,12 +624,14 @@ class MemoryCoreService:
             timestamp=now,
             details={
                 "sessions": len(sessions),
+                "projects": len(projects),
                 "observations": len(observations),
                 "memories": len(memories),
                 "summaries": len(summaries),
                 "memoryCandidates": len(memory_candidates),
                 "llmProcessingJobs": len(llm_processing_jobs),
                 "knowledge": len(knowledge),
+                "insights": len(insights),
                 "indexJobs": len(index_jobs),
             },
         )
@@ -487,6 +640,9 @@ class MemoryCoreService:
             version=__version__,
             schemaVersion=GOVERNANCE_SCHEMA_VERSION,
             exportedAt=now,
+            projects=projects,
+            projectProfiles=self.list_project_profiles(),
+            pinnedMemory=self.list_pinned_memory(),
             sessions=sessions,
             observations=observations,
             memories=memories,
@@ -494,6 +650,7 @@ class MemoryCoreService:
             memoryCandidates=memory_candidates,
             llmProcessingJobs=llm_processing_jobs,
             knowledge=knowledge,
+            insights=insights,
             wikiPages=self.list_wiki_pages(),
             wikiUpdateJobs=self.list_wiki_jobs(),
             indexJobs=index_jobs,
@@ -507,6 +664,25 @@ class MemoryCoreService:
         skipped: dict[str, int] = {}
         errors: list[str] = []
 
+        self._import_collection(KV.projects, payload.get("projects", []), ProjectRecord, imported, skipped, errors, "projects")
+        self._import_collection(
+            KV.project_profiles,
+            payload.get("projectProfiles", []),
+            ProjectProfileRecord,
+            imported,
+            skipped,
+            errors,
+            "projectProfiles",
+        )
+        self._import_collection(
+            KV.pinned_memory,
+            payload.get("pinnedMemory", []),
+            PinnedMemoryRecord,
+            imported,
+            skipped,
+            errors,
+            "pinnedMemory",
+        )
         self._import_collection(KV.sessions, payload.get("sessions", []), SessionRecord, imported, skipped, errors, "sessions")
         self._import_observations(payload.get("observations", []), imported, skipped, errors)
         self._import_collection(KV.memories, payload.get("memories", []), MemoryRecord, imported, skipped, errors, "memories")
@@ -530,6 +706,7 @@ class MemoryCoreService:
             "llmProcessingJobs",
         )
         self._import_collection(KV.knowledge, payload.get("knowledge", []), KnowledgeRecord, imported, skipped, errors, "knowledge")
+        self._import_collection(KV.insights, payload.get("insights", []), InsightRecord, imported, skipped, errors, "insights")
         self._import_collection(KV.wiki_pages, payload.get("wikiPages", []), WikiPageRecord, imported, skipped, errors, "wikiPages")
         self._import_collection(
             KV.wiki_update_jobs,
@@ -666,7 +843,10 @@ class MemoryCoreService:
             observation = observations_by_id.get(summary.observationId) if summary.observationId else None
             self.search_service.index_document(summary_document(summary, observation))
         for knowledge in self.list_knowledge():
-            self.search_service.index_document(knowledge_document(knowledge))
+            if not knowledge.deleted:
+                self.search_service.index_document(knowledge_document(knowledge))
+        for insight in self.list_insights():
+            self.search_service.index_document(insight_document(insight))
         for page in self.list_wiki_pages():
             self.search_service.index_document(wiki_page_document(page))
 
@@ -700,6 +880,242 @@ class MemoryCoreService:
             raise RuntimeError("search service is not configured")
         return self.search_service.repair()
 
+    def consolidate_wiki(self, request: WikiConsolidateRequest | None = None) -> WikiConsolidateResponse:
+        request = request or WikiConsolidateRequest()
+        if request.scope == "project" and (request.project or request.projectId):
+            project = self._resolve_project_record(project=request.project, project_id=request.projectId)
+            request.project = project.name
+            request.projectId = project.id
+        source_items = self._consolidation_sources(request.limit, request.project)
+        if len(source_items) < request.minEvidence:
+            return WikiConsolidateResponse(skipped={"reason": "insufficient evidence", "sources": len(source_items)})
+        if not self.llm or not hasattr(self.llm, "consolidate_wiki"):
+            raise RuntimeError("wiki consolidation requires an llm provider")
+        return self._consolidate_wiki_with_llm(request, source_items)
+
+    def recall_lessons(self, request: LessonRecallRequest) -> LessonRecallResponse:
+        terms = _query_terms(request.query)
+        lessons = [
+            item
+            for item in self.list_knowledge()
+            if item.kind == "lesson"
+            and not item.deleted
+            and (item.confidence or 0.0) >= request.minConfidence
+            and (request.project is None or item.project == request.project)
+        ]
+        scored = sorted(
+            lessons,
+            key=lambda item: (
+                _term_overlap(" ".join([item.content, " ".join(item.concepts)]), terms),
+                item.confidence or 0.0,
+                item.updatedAt,
+            ),
+            reverse=True,
+        )
+        return LessonRecallResponse(lessons=[item for item in scored if not terms or _term_overlap(item.content, terms) > 0][: request.limit])
+
+    def strengthen_lesson(self, lesson_id: str) -> KnowledgeRecord:
+        raw = self.kv.get(KV.knowledge, lesson_id)
+        if raw is None:
+            raise ValueError(f"lesson not found: {lesson_id}")
+        lesson = KnowledgeRecord.model_validate(raw)
+        if lesson.kind != "lesson":
+            raise ValueError(f"knowledge is not a lesson: {lesson_id}")
+        return self._reinforce_knowledge(lesson, [], utc_now_iso())
+
+    def decay_lessons(self, limit: int = 100) -> dict[str, object]:
+        now = utc_now_iso()
+        decayed = 0
+        deleted = 0
+        for lesson in [item for item in self.list_knowledge() if item.kind == "lesson" and not item.deleted][:limit]:
+            baseline = lesson.lastDecayedAt or lesson.lastReinforcedAt or lesson.updatedAt
+            days = _days_between(baseline, now)
+            if days < 7:
+                continue
+            lesson.confidence = max(0.05, round((lesson.confidence or 0.5) - lesson.decayRate * (days // 7), 3))
+            lesson.lastDecayedAt = now
+            lesson.updatedAt = now
+            if lesson.confidence <= 0.1 and lesson.reinforcements == 0:
+                lesson.deleted = True
+                deleted += 1
+            else:
+                decayed += 1
+            self.kv.set(KV.knowledge, lesson.id, lesson.model_dump())
+            if self.search_service:
+                if lesson.deleted:
+                    self.search_service.delete_document("knowledge", lesson.id)
+                else:
+                    self.search_service.index_document(knowledge_document(lesson))
+        return {"decayed": decayed, "deleted": deleted}
+
+    def create_crystal(self, request: CrystalCreateRequest) -> CrystalCreateResponse:
+        now = utc_now_iso()
+        source_group = _knowledge_source_group(request.sourceIds)
+        evidence = self._wiki_evidence(request.sourceIds)
+        content = _crystal_content(evidence, request.sourceIds)
+        crystal = self._upsert_knowledge(
+            kind="crystal",
+            content=content,
+            source_ids=request.sourceIds,
+            concepts=_concepts_from_evidence(evidence),
+            confidence=0.75,
+            now=now,
+            source_group=source_group,
+            project=request.project,
+            scope="project" if request.project else "global",
+        )
+        lesson = self._upsert_knowledge(
+            kind="lesson",
+            content=f"Preserve the outcome from this source group: {content}",
+            source_ids=[f"knowledge:{crystal.id}", *request.sourceIds],
+            concepts=crystal.concepts,
+            confidence=0.65,
+            now=now,
+            project=request.project,
+            scope="project" if request.project else "global",
+        )
+        return CrystalCreateResponse(crystal=crystal, lessons=[lesson])
+
+    def reflect_wiki(self, request: WikiReflectRequest | None = None) -> WikiReflectResponse:
+        request = request or WikiReflectRequest()
+        knowledge = [
+            item
+            for item in self.list_knowledge()
+            if not item.deleted and (request.project is None or item.project in (None, request.project))
+        ][: request.limit]
+        groups = self._group_sources_by_concepts(
+            [
+                {
+                    "sourceId": f"knowledge:{item.id}",
+                    "content": item.content,
+                    "concepts": item.concepts or [item.kind],
+                }
+                for item in knowledge
+            ],
+        )
+        insights: list[InsightRecord] = []
+        reinforced = 0
+        now = utc_now_iso()
+        for concept, items in groups.items():
+            if len(items) < 2:
+                continue
+            source_ids = _dedupe_strings([str(item["sourceId"]) for item in items])
+            content = self._consolidated_content(concept, items)
+            title = f"{concept} insight"
+            fingerprint = _knowledge_fingerprint("insight", content, None)
+            existing = self._insight_by_fingerprint(fingerprint)
+            if existing:
+                existing.reinforcements += 1
+                existing.lastReinforcedAt = now
+                existing.updatedAt = now
+                existing.sourceIds = _dedupe_strings([*existing.sourceIds, *source_ids])
+                self.kv.set(KV.insights, existing.id, existing.model_dump())
+                if self.search_service:
+                    self.search_service.index_document(insight_document(existing))
+                insights.append(existing)
+                reinforced += 1
+                continue
+            insight = InsightRecord(
+                id=generate_id("ins"),
+                title=title,
+                content=content,
+                sourceIds=source_ids,
+                concepts=[concept],
+                confidence=min(0.9, 0.55 + len(items) * 0.08),
+                fingerprint=fingerprint,
+                project=request.project,
+                createdAt=now,
+                updatedAt=now,
+            )
+            self.kv.set(KV.insights, insight.id, insight.model_dump())
+            if self.search_service:
+                self.search_service.index_document(insight_document(insight))
+            insights.append(insight)
+        return WikiReflectResponse(insights=insights, reinforced=reinforced, skipped={"groups": len(groups)})
+
+    def lint_wiki(self) -> WikiLintResponse:
+        if not self.llm or not hasattr(self.llm, "lint_wiki"):
+            raise RuntimeError("wiki lint requires an llm provider")
+        raw = self.llm.lint_wiki(self._existing_wiki_records_for_llm())  # type: ignore[union-attr]
+        issues = [WikiLintIssue.model_validate(item) for item in parse_lint_xml(raw)]
+        issues.extend(self._deterministic_wiki_lint_issues())
+        return WikiLintResponse(issues=issues)
+
+    def _deterministic_wiki_lint_issues(self) -> list[WikiLintIssue]:
+        issues: list[WikiLintIssue] = []
+        for item in self.list_knowledge():
+            if not item.sourceIds:
+                issues.append(
+                    WikiLintIssue(
+                        type="missing_source",
+                        severity="warning",
+                        message=f"Knowledge {item.id} has no source ids.",
+                        sourceIds=[f"knowledge:{item.id}"],
+                        suggestedAction="Re-file or consolidate this knowledge with provenance.",
+                    ),
+                )
+            if item.confidence is not None and item.confidence < 0.25 and not item.deleted:
+                issues.append(
+                    WikiLintIssue(
+                        type="low_confidence",
+                        severity="info",
+                        message=f"Knowledge {item.id} has low confidence.",
+                        sourceIds=[f"knowledge:{item.id}", *item.sourceIds],
+                        suggestedAction="Strengthen with more evidence or let lesson decay mark it inactive.",
+                    ),
+                )
+            if _contains_contradiction_marker(item.content):
+                issues.append(
+                    WikiLintIssue(
+                        type="contradiction",
+                        severity="warning",
+                        message=f"Knowledge {item.id} may contain a contradiction marker.",
+                        sourceIds=[f"knowledge:{item.id}", *item.sourceIds],
+                        suggestedAction="Review and file a corrected answer or rerun consolidation.",
+                    ),
+                )
+        for page in self.list_wiki_pages():
+            if not page.sourceIds:
+                issues.append(
+                    WikiLintIssue(
+                        type="orphan",
+                        severity="warning",
+                        message=f"Wiki page {page.id} has no source ids.",
+                        sourceIds=[f"wikiPage:{page.id}"],
+                        suggestedAction="Rebuild the page from sourced evidence.",
+                    ),
+                )
+        return issues
+
+    def file_wiki_answer(self, request: WikiFileAnswerRequest) -> WikiFileAnswerResponse:
+        now = utc_now_iso()
+        if request.kind == "insight":
+            insight = self._upsert_insight(
+                title=request.query[:80],
+                content=request.content,
+                source_ids=request.sourceIds,
+                concepts=request.concepts,
+                confidence=request.confidence,
+                now=now,
+                project=request.project,
+                scope="project" if request.project else "global",
+                query=request.query,
+            )
+            return WikiFileAnswerResponse(record=insight)
+        record = self._upsert_knowledge(
+            kind=request.kind,
+            content=request.content,
+            source_ids=request.sourceIds,
+            concepts=request.concepts,
+            confidence=request.confidence,
+            now=now,
+            source_group=_knowledge_source_group(request.sourceIds) if request.kind == "crystal" and request.sourceIds else None,
+            project=request.project,
+            scope="project" if request.project else "global",
+            query=request.query,
+        )
+        return WikiFileAnswerResponse(record=record)
+
     def run_maintenance(self, request: MaintenanceRunRequest | None = None) -> MaintenanceRunResponse:
         request = request or MaintenanceRunRequest()
         errors: list[str] = []
@@ -725,12 +1141,24 @@ class MemoryCoreService:
             merged = self.merge_pending_wiki_jobs()
             retried = self.retry_failed_wiki_jobs(request.limit) if request.retryFailed else 0
             wiki = self.process_wiki_updates(WikiUpdateRequest(limit=request.limit)) if self.llm else WikiUpdateResponse()
+            consolidate = self.consolidate_wiki(WikiConsolidateRequest(limit=request.limit))
+            lesson_decay = self.decay_lessons(request.limit)
+            profiles = []
+            if self.llm:
+                for project in self.list_projects()[:5]:
+                    try:
+                        profiles.append(self.update_project_profile(ProjectProfileUpdateRequest(projectId=project.id, limit=request.limit)).profile.model_dump())
+                    except Exception as exc:
+                        errors.append(f"profile:{project.id}: {exc}")
             wiki_result = {
                 "merged": merged,
                 "retried": retried,
                 "jobs": [job.model_dump() for job in wiki.jobs],
                 "pages": [page.model_dump() for page in wiki.pages],
                 "knowledge": [item.model_dump() for item in wiki.knowledge],
+                "consolidation": consolidate.model_dump(),
+                "lessonDecay": lesson_decay,
+                "projectProfiles": profiles,
             }
         except Exception as exc:
             errors.append(f"wiki: {exc}")
@@ -800,6 +1228,48 @@ class MemoryCoreService:
                 return observation
         return None
 
+    def _resolve_project_record(
+        self,
+        cwd: str | None = None,
+        project: str | None = None,
+        project_id: str | None = None,
+    ) -> ProjectRecord:
+        candidate = resolve_project_identity(cwd=cwd, project=project, project_id=project_id)
+        existing = self.kv.get(KV.projects, candidate.id)
+        record = resolve_project_identity(
+            cwd=cwd or candidate.root,
+            project=project or candidate.name,
+            project_id=project_id or candidate.id,
+            existing=ProjectRecord.model_validate(existing) if existing else None,
+        )
+        self.kv.set(KV.projects, record.id, record.model_dump())
+        return record
+
+    def _current_project_session_id(self, project: ProjectRecord, now: str) -> str:
+        raw = self.kv.get(KV.project_current_sessions, project.id)
+        if raw and isinstance(raw, dict):
+            session_id = str(raw.get("sessionId") or "")
+            updated_at = str(raw.get("updatedAt") or "")
+            if session_id and not self._session_is_stale(updated_at, now):
+                session_raw = self.kv.get(KV.sessions, session_id)
+                if session_raw:
+                    session = SessionRecord.model_validate(session_raw)
+                    if session.status == "active":
+                        return session.id
+        return generate_id("ses")
+
+    def _session_is_stale(self, updated_at: str, now: str) -> bool:
+        try:
+            baseline = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            current = datetime.fromisoformat(now.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        if baseline.tzinfo is None:
+            baseline = baseline.replace(tzinfo=UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        return current - baseline > timedelta(minutes=DEFAULT_SESSION_TTL_MINUTES)
+
     def _record_audit(self, record: AuditRecord) -> None:
         self.kv.set(KV.audit, record.id, record.model_dump())
 
@@ -807,12 +1277,18 @@ class MemoryCoreService:
         self,
         source_ids: list[str],
         topic: WikiTopic | None = None,
+        scope: MemoryScope = "project",
+        project: str | None = None,
+        project_id: str | None = None,
     ) -> WikiUpdateJobRecord:
         now = utc_now_iso()
         job = WikiUpdateJobRecord(
             id=generate_id("wiki_job"),
             sourceIds=_dedupe_strings(source_ids),
             topic=topic,
+            scope=scope,
+            project=project,
+            projectId=project_id,
             status="pending",
             createdAt=now,
             updatedAt=now,
@@ -832,7 +1308,7 @@ class MemoryCoreService:
         self.kv.set(KV.wiki_update_jobs, job.id, job.model_dump())
         try:
             topic = job.topic or self._infer_wiki_topic(job.sourceIds)
-            existing = self._wiki_page_by_topic(topic)
+            existing = self._wiki_page_by_topic(topic, job.scope, job.projectId)
             title = existing.title if existing else WIKI_TITLES[topic]
             evidence = self._wiki_evidence(job.sourceIds)
             distilled = self._distill_knowledge(job, evidence)
@@ -885,6 +1361,9 @@ class MemoryCoreService:
                 reinforcements=1 if kind == "lesson" else 0,
                 lastReinforcedAt=now if kind == "lesson" else None,
                 sourceGroup=source_group if kind == "crystal" else None,
+                scope=job.scope,
+                project=job.project,
+                projectId=job.projectId,
                 createdAt=now,
                 updatedAt=now,
             )
@@ -914,6 +1393,7 @@ class MemoryCoreService:
     def _reinforce_knowledge(self, existing: KnowledgeRecord, source_ids: list[str], now: str) -> KnowledgeRecord:
         existing.sourceIds = _dedupe_strings([*existing.sourceIds, *source_ids])
         existing.updatedAt = now
+        existing.deleted = False
         if existing.kind == "lesson":
             existing.reinforcements += 1
             existing.lastReinforcedAt = now
@@ -923,6 +1403,309 @@ class MemoryCoreService:
         if self.search_service:
             self.search_service.index_document(knowledge_document(existing))
         return existing
+
+    def _upsert_knowledge(
+        self,
+        kind: str,
+        content: str,
+        source_ids: list[str],
+        concepts: list[str],
+        confidence: float | None,
+        now: str,
+        source_group: str | None = None,
+        project: str | None = None,
+        project_id: str | None = None,
+        scope: MemoryScope = "global",
+        query: str | None = None,
+    ) -> KnowledgeRecord:
+        fingerprint = _knowledge_fingerprint(kind, content, source_group if kind == "crystal" else None)
+        existing = self._knowledge_by_fingerprint(fingerprint)
+        if existing:
+            existing.concepts = _dedupe_strings([*existing.concepts, *concepts])
+            existing.scope = scope or existing.scope
+            existing.project = project or existing.project
+            existing.projectId = project_id or existing.projectId
+            existing.query = query or existing.query
+            if confidence is not None:
+                existing.confidence = max(existing.confidence or 0.0, confidence)
+            return self._reinforce_knowledge(existing, source_ids, now)
+        record = KnowledgeRecord(
+            id=generate_id("know"),
+            kind=kind,  # type: ignore[arg-type]
+            content=content,
+            sourceIds=_dedupe_strings(source_ids),
+            concepts=_dedupe_strings(concepts),
+            files=[],
+            confidence=confidence,
+            fingerprint=fingerprint,
+            reinforcements=1 if kind == "lesson" else 0,
+            lastReinforcedAt=now if kind == "lesson" else None,
+            scope=scope,
+            project=project,
+            projectId=project_id,
+            query=query,
+            sourceGroup=source_group,
+            createdAt=now,
+            updatedAt=now,
+        )
+        self.kv.set(KV.knowledge, record.id, record.model_dump())
+        if self.search_service:
+            self.search_service.index_document(knowledge_document(record))
+        return record
+
+    def _upsert_insight(
+        self,
+        title: str,
+        content: str,
+        source_ids: list[str],
+        concepts: list[str],
+        confidence: float | None,
+        now: str,
+        project: str | None = None,
+        project_id: str | None = None,
+        scope: MemoryScope = "global",
+        query: str | None = None,
+    ) -> InsightRecord:
+        fingerprint = _knowledge_fingerprint("insight", content, None)
+        existing = self._insight_by_fingerprint(fingerprint)
+        if existing:
+            existing.sourceIds = _dedupe_strings([*existing.sourceIds, *source_ids])
+            existing.concepts = _dedupe_strings([*existing.concepts, *concepts])
+            existing.reinforcements += 1
+            existing.lastReinforcedAt = now
+            existing.updatedAt = now
+            existing.scope = scope or existing.scope
+            existing.project = project or existing.project
+            existing.projectId = project_id or existing.projectId
+            existing.query = query or existing.query
+            if confidence is not None:
+                existing.confidence = max(existing.confidence or 0.0, confidence)
+            self.kv.set(KV.insights, existing.id, existing.model_dump())
+            if self.search_service:
+                self.search_service.index_document(insight_document(existing))
+            return existing
+        insight = InsightRecord(
+            id=generate_id("ins"),
+            title=title,
+            content=content,
+            sourceIds=_dedupe_strings(source_ids),
+            concepts=_dedupe_strings(concepts),
+            confidence=confidence,
+            fingerprint=fingerprint,
+            scope=scope,
+            project=project,
+            projectId=project_id,
+            query=query,
+            createdAt=now,
+            updatedAt=now,
+        )
+        self.kv.set(KV.insights, insight.id, insight.model_dump())
+        if self.search_service:
+            self.search_service.index_document(insight_document(insight))
+        return insight
+
+    def _insight_by_fingerprint(self, fingerprint: str) -> InsightRecord | None:
+        for item in self.list_insights():
+            if item.fingerprint == fingerprint:
+                return item
+        return None
+
+    def _consolidate_wiki_with_llm(
+        self,
+        request: WikiConsolidateRequest,
+        source_items: list[dict[str, object]],
+    ) -> WikiConsolidateResponse:
+        raw = self.llm.consolidate_wiki(source_items, self._existing_wiki_records_for_llm(request.limit, request.project))  # type: ignore[union-attr]
+        parsed = parse_wiki_consolidation_xml(raw)
+        now = utc_now_iso()
+        semantic: list[KnowledgeRecord] = []
+        procedural: list[KnowledgeRecord] = []
+        default_source_ids = _dedupe_strings([str(item["sourceId"]) for item in source_items if item.get("sourceId")])
+        for proposal in parsed["knowledge"]:
+            kind = str(proposal["kind"])
+            record = self._upsert_knowledge(
+                kind=kind,
+                content=str(proposal["content"]),
+                source_ids=default_source_ids,
+                concepts=proposal.get("concepts") if isinstance(proposal.get("concepts"), list) else [],
+                confidence=proposal.get("confidence") if isinstance(proposal.get("confidence"), float) else None,
+                now=now,
+                project=request.project,
+                project_id=request.projectId,
+                scope="project" if request.project or request.projectId else "global",
+            )
+            if record.kind == "semantic":
+                semantic.append(record)
+            elif record.kind == "procedural":
+                procedural.append(record)
+        pages = [
+            self._upsert_dynamic_wiki_page(
+                page,
+                default_source_ids,
+                now,
+                scope="project" if request.project else "global",
+                project=request.project,
+                project_id=request.projectId,
+            )
+            for page in parsed["pages"]
+        ]
+        issues = [WikiLintIssue.model_validate(item) for item in parsed["issues"]]
+        return WikiConsolidateResponse(
+            semantic=semantic,
+            procedural=procedural,
+            pages=pages,
+            lintIssues=issues,
+            skipped={"strategy": "llm", "sources": len(source_items), "existing": len(self._existing_wiki_records_for_llm(request.limit, request.project))},
+        )
+
+    def _upsert_dynamic_wiki_page(
+        self,
+        proposal: dict[str, object],
+        default_source_ids: list[str],
+        now: str,
+        scope: MemoryScope = "global",
+        project: str | None = None,
+        project_id: str | None = None,
+    ) -> WikiPageRecord:
+        page_type = str(proposal.get("type") or "synthesis")
+        slug = str(proposal.get("slug") or _knowledge_fingerprint(page_type, str(proposal.get("title", "")), None)[:24])
+        topic = proposal.get("topic") if proposal.get("topic") in WIKI_TOPICS else "project_overview"
+        existing = self._wiki_page_by_type_slug(page_type, slug, scope, project_id)
+        source_ids = proposal.get("sourceIds") if isinstance(proposal.get("sourceIds"), list) else []
+        page = WikiPageRecord(
+            id=existing.id if existing else generate_id("wiki"),
+            title=str(proposal.get("title") or slug),
+            topic=topic,  # type: ignore[arg-type]
+            type=page_type,  # type: ignore[arg-type]
+            slug=slug,
+            parentTopic=topic,  # type: ignore[arg-type]
+            content=str(proposal.get("content") or ""),
+            sourceIds=_dedupe_strings([*(existing.sourceIds if existing else []), *[str(item) for item in source_ids], *default_source_ids]),
+            confidence=proposal.get("confidence") if isinstance(proposal.get("confidence"), float) else None,
+            scope=scope,
+            project=project,
+            projectId=project_id,
+            createdAt=existing.createdAt if existing else now,
+            updatedAt=now,
+        )
+        self.kv.set(KV.wiki_pages, page.id, page.model_dump())
+        if self.search_service:
+            self.search_service.index_document(wiki_page_document(page))
+        self._record_audit(
+            AuditRecord(
+                id=generate_id("aud"),
+                action="wiki_update",
+                targetType="wiki_page",
+                targetId=page.id,
+                source="llm",
+                timestamp=now,
+                details={"type": page.type, "slug": page.slug, "topic": page.topic, "sourceIds": page.sourceIds},
+            ),
+        )
+        return page
+
+    def _wiki_page_by_type_slug(
+        self,
+        page_type: str,
+        slug: str,
+        scope: MemoryScope | None = None,
+        project_id: str | None = None,
+    ) -> WikiPageRecord | None:
+        for page in self.list_wiki_pages():
+            if (
+                page.type == page_type
+                and page.slug == slug
+                and (scope is None or page.scope == scope)
+                and (project_id is None or page.projectId == project_id)
+            ):
+                return page
+        return None
+
+    def _existing_wiki_records_for_llm(self, limit: int = 50, project: str | None = None) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        for item in self.list_knowledge():
+            if item.deleted or (project is not None and item.project not in (None, project)):
+                continue
+            records.append({"recordType": "knowledge", **item.model_dump()})
+        for item in self.list_insights():
+            if project is not None and item.project not in (None, project):
+                continue
+            records.append({"recordType": "insight", **item.model_dump()})
+        for item in self.list_wiki_pages():
+            records.append({"recordType": "wikiPage", **item.model_dump()})
+        return records[:limit]
+
+    def _consolidation_sources(self, limit: int, project: str | None = None) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for summary in self.list_summaries():
+            items.append(
+                {
+                    "sourceId": f"summary:{summary.id}",
+                    "content": summary.content,
+                    "concepts": [],
+                    "project": None,
+                },
+            )
+        for memory in self.list_memories():
+            if project is None or memory.source == project or project in memory.concepts:
+                items.append(
+                    {
+                        "sourceId": f"memory:{memory.id}",
+                        "content": memory.content,
+                        "concepts": memory.concepts,
+                        "project": None,
+                    },
+                )
+        for knowledge in self.list_knowledge():
+            if not knowledge.deleted and (project is None or knowledge.project in (None, project)):
+                items.append(
+                    {
+                        "sourceId": f"knowledge:{knowledge.id}",
+                        "content": knowledge.content,
+                        "concepts": knowledge.concepts or [knowledge.kind],
+                        "project": knowledge.project,
+                    },
+                )
+        return items[:limit]
+
+    def _project_profile_evidence(self, project_id: str, limit: int) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for observation in self.list_observations():
+            if observation.projectId == project_id:
+                items.append({"sourceId": f"observation:{observation.id}", **observation.model_dump()})
+        for summary in self.list_summaries():
+            if summary.projectId == project_id:
+                items.append({"sourceId": f"summary:{summary.id}", **summary.model_dump()})
+        for memory in self.list_memories():
+            if memory.projectId == project_id:
+                items.append({"sourceId": f"memory:{memory.id}", **memory.model_dump()})
+        for knowledge in self.list_knowledge():
+            if knowledge.projectId == project_id and not knowledge.deleted:
+                items.append({"sourceId": f"knowledge:{knowledge.id}", **knowledge.model_dump()})
+        for page in self.list_wiki_pages():
+            if page.projectId == project_id:
+                items.append({"sourceId": f"wikiPage:{page.id}", **page.model_dump()})
+        return sorted(items, key=lambda item: str(item.get("updatedAt") or item.get("createdAt") or ""), reverse=True)[:limit]
+
+    def _group_sources_by_concepts(self, items: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+        groups: dict[str, list[dict[str, object]]] = {}
+        for item in items:
+            concepts = item.get("concepts")
+            keys = [str(value).casefold() for value in concepts] if isinstance(concepts, list) and concepts else []
+            if not keys:
+                keys = _query_terms(str(item.get("content", "")))[:3]
+            for key in keys:
+                if len(key) < 3:
+                    continue
+                groups.setdefault(key, []).append(item)
+        return groups
+
+    def _consolidated_content(self, concept: str, items: list[dict[str, object]]) -> str:
+        snippets = []
+        for item in items[:5]:
+            content = re.sub(r"\s+", " ", str(item.get("content", ""))).strip()
+            snippets.append(content[:160])
+        return f"{concept}: " + " / ".join(snippets)
 
     def _uncovered_wiki_source_ids(self, source_ids: list[str]) -> list[str]:
         covered = {source_id for item in self.list_knowledge() for source_id in item.sourceIds}
@@ -945,6 +1728,9 @@ class MemoryCoreService:
             content=str(proposal["content"]),
             sourceIds=source_ids,
             confidence=proposal.get("confidence") if isinstance(proposal.get("confidence"), float) else None,
+            scope=job.scope,
+            project=job.project,
+            projectId=job.projectId,
             createdAt=existing.createdAt if existing else now,
             updatedAt=now,
         )
@@ -964,9 +1750,14 @@ class MemoryCoreService:
         )
         return page
 
-    def _wiki_page_by_topic(self, topic: WikiTopic) -> WikiPageRecord | None:
+    def _wiki_page_by_topic(
+        self,
+        topic: WikiTopic,
+        scope: MemoryScope | None = None,
+        project_id: str | None = None,
+    ) -> WikiPageRecord | None:
         for page in self.list_wiki_pages():
-            if page.topic == topic:
+            if page.topic == topic and page.type == "topic" and (scope is None or page.scope == scope) and (project_id is None or page.projectId == project_id):
                 return page
         return None
 
@@ -1010,14 +1801,66 @@ def _dedupe_strings(items: list[str]) -> list[str]:
 def _governance_schema_version(payload: dict[str, object]) -> int:
     raw = payload.get("schemaVersion")
     if raw is None and payload.get("version"):
-        return GOVERNANCE_SCHEMA_VERSION
+        return 1
     try:
         schema_version = int(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError("unsupported or missing governance schemaVersion") from exc
-    if schema_version != GOVERNANCE_SCHEMA_VERSION:
+    if schema_version > GOVERNANCE_SCHEMA_VERSION:
         raise ValueError(f"unsupported governance schemaVersion: {schema_version}")
     return schema_version
+
+
+def _parse_project_profile_text(text: str) -> dict[str, object]:
+    data = _json_object(text)
+    if data:
+        return {
+            "content": str(data.get("content") or ""),
+            "goals": _string_list_value(data.get("goals")),
+            "techStack": _string_list_value(data.get("techStack")),
+            "keyFiles": _string_list_value(data.get("keyFiles")),
+            "commands": _string_list_value(data.get("commands")),
+            "conventions": _string_list_value(data.get("conventions")),
+            "risks": _string_list_value(data.get("risks")),
+            "confidence": _float_value(data.get("confidence")),
+        }
+    return {
+        "content": text.strip(),
+        "goals": [],
+        "techStack": [],
+        "keyFiles": [],
+        "commands": [],
+        "conventions": [],
+        "risks": [],
+        "confidence": None,
+    }
+
+
+def _json_object(text: str) -> dict[str, object] | None:
+    try:
+        import json
+
+        value = json.loads(text)
+    except Exception:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _string_list_value(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+def _float_value(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_list(value: object, label: str, errors: list[str]) -> bool:
@@ -1068,3 +1911,44 @@ def _knowledge_fingerprint(kind: str, content: str, source_group: str | None = N
 def _knowledge_source_group(source_ids: list[str]) -> str:
     normalized = "|".join(sorted(source_ids))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _query_terms(query: str) -> list[str]:
+    return [term for term in re.split(r"[\s,，。:：/\\|]+", query.casefold()) if len(term) > 1]
+
+
+def _term_overlap(text: str, terms: list[str]) -> int:
+    haystack = text.casefold()
+    return sum(1 for term in terms if term in haystack)
+
+
+def _days_between(start: str, end: str) -> int:
+    try:
+        from datetime import datetime
+
+        lhs = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        rhs = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        return max(0, int((rhs - lhs).total_seconds() // 86400))
+    except Exception:
+        return 0
+
+
+def _crystal_content(evidence: list[dict[str, object]], source_ids: list[str]) -> str:
+    snippets = [re.sub(r"\s+", " ", str(item.get("content", ""))).strip()[:180] for item in evidence[:5]]
+    if snippets:
+        return "Crystal digest: " + " / ".join(snippets)
+    return f"Crystal digest for sources: {', '.join(source_ids)}"
+
+
+def _concepts_from_evidence(evidence: list[dict[str, object]]) -> list[str]:
+    concepts: list[str] = []
+    for item in evidence:
+        raw = item.get("concepts")
+        if isinstance(raw, list):
+            concepts.extend(str(value) for value in raw)
+    return _dedupe_strings(concepts)
+
+
+def _contains_contradiction_marker(content: str) -> bool:
+    lowered = content.casefold()
+    return any(term in lowered for term in ["contradict", "conflict", "supersede", "矛盾", "冲突", "取代"])

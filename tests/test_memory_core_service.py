@@ -1,8 +1,10 @@
 import pytest
 
 from agentmemory.core.models import (
+    CrystalCreateRequest,
     ForgetRequest,
     ContextRequest,
+    LessonRecallRequest,
     MaintenanceRunRequest,
     ObserveRequest,
     RememberRequest,
@@ -10,6 +12,9 @@ from agentmemory.core.models import (
     SessionEndRequest,
     SessionStartRequest,
     GovernanceImportRequest,
+    WikiConsolidateRequest,
+    WikiFileAnswerRequest,
+    WikiReflectRequest,
     WikiRebuildRequest,
     WikiUpdateRequest,
 )
@@ -241,7 +246,8 @@ def test_export_data_writes_audit_and_includes_governance_records(tmp_path):
     exported = service.export_data(source="test")
 
     assert exported.version
-    assert exported.schemaVersion == 1
+    assert exported.schemaVersion == 2
+    assert len(exported.projects) == 1
     assert exported.exportedAt
     assert len(exported.sessions) == 1
     assert len(exported.observations) == 1
@@ -272,7 +278,8 @@ def test_import_data_restores_export_into_fresh_searchable_store(tmp_path):
     search = target.search(SearchRequest(query="searchable memories", mode="keyword", sourceTypes=["memory"], matchMode="any"))
     context = target.context(ContextRequest(query="Stub wiki update", sourceTypes=["wikiPage"], matchMode="any"))
 
-    assert result.schemaVersion == 1
+    assert result.schemaVersion == 2
+    assert result.imported["projects"] == 1
     assert result.auditId.startswith("aud_")
     assert result.imported["memories"] == 1
     assert result.imported["observations"] == 1
@@ -420,3 +427,104 @@ def test_wiki_rebuild_reuses_existing_knowledge(tmp_path):
     assert {item.id for item in second_knowledge} == first_ids
     assert len(second_knowledge) == 4
     assert next(item for item in second_knowledge if item.kind == "lesson").reinforcements == 12
+
+
+def test_wiki_consolidation_lesson_crystal_reflect_and_lint(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
+    first = service.remember(
+        RememberRequest(
+            content="When validating AgentMemory, run pytest and OpenSpec validation.",
+            language="en",
+            concepts=["validation", "workflow"],
+        ),
+    )
+    second = service.remember(
+        RememberRequest(
+            content="AgentMemory validation workflow should include pytest before archive.",
+            language="en",
+            concepts=["validation", "workflow"],
+        ),
+    )
+
+    consolidated = service.consolidate_wiki(WikiConsolidateRequest(limit=10, minEvidence=2))
+    lesson = service.file_wiki_answer(
+        WikiFileAnswerRequest(
+            query="How should validation run?",
+            content="Always run pytest and OpenSpec validation before archiving changes.",
+            kind="lesson",
+            sourceIds=[f"memory:{first.memoryId}", f"memory:{second.memoryId}"],
+            concepts=["validation"],
+            confidence=0.8,
+        ),
+    ).record
+    recalled = service.recall_lessons(LessonRecallRequest(query="pytest validation"))
+    crystal = service.create_crystal(
+        CrystalCreateRequest(sourceIds=[f"memory:{first.memoryId}", f"memory:{second.memoryId}"]),
+    )
+    reflected = service.reflect_wiki(WikiReflectRequest(limit=20))
+    lint = service.lint_wiki()
+
+    assert consolidated.semantic
+    assert consolidated.procedural
+    assert lesson.kind == "lesson"
+    assert recalled.lessons[0].id == lesson.id
+    assert crystal.crystal.kind == "crystal"
+    assert crystal.lessons
+    assert reflected.insights
+    assert all(issue.type != "missing_source" for issue in lint.issues)
+
+
+def test_llm_consolidation_creates_dynamic_page_and_lint_issue(tmp_path):
+    kv = StateKV(tmp_path / "memory.sqlite3")
+    search = MemorySearchService(
+        kv,
+        settings=ai_settings(tmp_path / "memory.sqlite3"),
+        embedding=StubEmbeddingProvider(),
+        llm=StubLLMProvider(),
+    )
+    service = MemoryCoreService(kv, llm=StubLLMProvider(), search=search)
+    service.remember(RememberRequest(content="LLM Wiki consolidation should create dynamic concept pages.", concepts=["wiki"]))
+    service.remember(RememberRequest(content="LLM Wiki consolidation should detect stale claims.", concepts=["wiki"]))
+
+    consolidated = service.consolidate_wiki(WikiConsolidateRequest(limit=10, minEvidence=2))
+    lint = service.lint_wiki()
+    search_result = service.search(
+        SearchRequest(query="llm-wiki-consolidation concept", mode="hybrid", sourceTypes=["wikiPage"]),
+    )
+
+    assert consolidated.pages
+    assert consolidated.pages[0].type == "concept"
+    assert consolidated.pages[0].slug == "llm-wiki-consolidation"
+    assert consolidated.pages[0].parentTopic == "project_overview"
+    assert consolidated.lintIssues[0].type == "stale"
+    assert any(issue.type == "contradiction" for issue in lint.issues)
+    assert search_result.results
+    assert search_result.results[0].sourceId == consolidated.pages[0].id
+
+
+def test_query_filed_insight_is_searchable_and_contextual(tmp_path):
+    kv = StateKV(tmp_path / "memory.sqlite3")
+    search = MemorySearchService(
+        kv,
+        settings=ai_settings(tmp_path / "memory.sqlite3"),
+        embedding=StubEmbeddingProvider(),
+        llm=StubLLMProvider(),
+    )
+    service = MemoryCoreService(kv, llm=StubLLMProvider(), search=search)
+
+    filed = service.file_wiki_answer(
+        WikiFileAnswerRequest(
+            query="What is LLM Wiki?",
+            content="LLM Wiki means structured compounding knowledge rather than fixed pages.",
+            kind="insight",
+            concepts=["wiki", "llm"],
+            confidence=0.9,
+        ),
+    )
+    service.search_service.process_pending()
+    result = service.search(SearchRequest(query="compounding knowledge", mode="hybrid", sourceTypes=["insight"]))
+    context = service.context(ContextRequest(query="LLM Wiki compounding", sourceTypes=["insight"]))
+
+    assert filed.record.id.startswith("ins_")
+    assert result.results[0].sourceType == "insight"
+    assert context.evidence[0]["sourceType"] == "insight"

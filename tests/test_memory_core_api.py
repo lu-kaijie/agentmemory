@@ -71,6 +71,19 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     wiki_jobs = client.get("/agentmemory/wiki/jobs")
     wiki_update = client.post("/agentmemory/wiki/update", json={"limit": 1})
     wiki_pages = client.get("/agentmemory/wiki/pages")
+    wiki_consolidate = client.post("/agentmemory/wiki/consolidate", json={"limit": 10, "minEvidence": 1})
+    wiki_file_answer = client.post(
+        "/agentmemory/wiki/file-answer",
+        json={
+            "query": "REST Wiki filing",
+            "content": "REST can file high-value answers into LLM Wiki insights.",
+            "kind": "insight",
+            "concepts": ["rest", "wiki"],
+            "confidence": 0.9,
+        },
+    )
+    wiki_insights = client.get("/agentmemory/wiki/insights")
+    wiki_lint = client.post("/agentmemory/wiki/lint")
     maintenance = client.post("/agentmemory/maintenance/run", json={"limit": 5})
 
     assert session_start.status_code == 200
@@ -123,6 +136,16 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert wiki_update.json()["jobs"][0]["status"] == "applied"
     assert wiki_pages.status_code == 200
     assert wiki_pages.json()["wikiPages"][0]["content"] == "Stub wiki update"
+    assert wiki_consolidate.status_code == 200
+    assert set(wiki_consolidate.json()) == {"semantic", "procedural", "pages", "lintIssues", "skipped"}
+    assert wiki_consolidate.json()["pages"][0]["type"] == "concept"
+    assert wiki_consolidate.json()["lintIssues"][0]["type"] == "stale"
+    assert wiki_file_answer.status_code == 200
+    assert wiki_file_answer.json()["record"]["id"].startswith("ins_")
+    assert wiki_insights.status_code == 200
+    assert wiki_insights.json()["insights"]
+    assert wiki_lint.status_code == 200
+    assert "issues" in wiki_lint.json()
     assert maintenance.status_code == 200
     assert set(maintenance.json()) == {"index", "wiki", "llm", "pageCompression", "errors"}
 
