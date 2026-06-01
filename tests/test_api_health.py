@@ -63,6 +63,8 @@ def test_viewer_static_content_has_required_sections_and_no_unsupported_actions(
         "/agentmemory/search",
         "/agentmemory/smart-search",
         "/agentmemory/context",
+        "/agentmemory/maintenance/run",
+        "Run Maintenance",
         "Global",
         "Project",
         "Knowledge",

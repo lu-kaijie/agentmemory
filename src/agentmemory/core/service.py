@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import asyncio
 
 from agentmemory.core.ids import generate_id, utc_now_iso
 from agentmemory.core.models import (
@@ -103,7 +102,12 @@ class MemoryCoreService:
         )
 
         self.kv.set(KV.observations(project.id), observation.id, observation.model_dump())
-        self._enqueue_wiki_job([f"observation:{observation.id}"])
+        self._enqueue_wiki_job(
+            [f"observation:{observation.id}"],
+            scope="project",
+            project=project.name,
+            project_id=project.id,
+        )
         if self.search_service:
             self.search_service.index_document(observation_document(observation))
         self._record_audit(
@@ -152,7 +156,12 @@ class MemoryCoreService:
             createdAt=now,
         )
         self.kv.set(KV.memories, memory.id, memory.model_dump())
-        self._enqueue_wiki_job([f"memory:{memory.id}"])
+        self._enqueue_wiki_job(
+            [f"memory:{memory.id}"],
+            scope=memory.scope,
+            project=memory.project,
+            project_id=memory.projectId,
+        )
         if self.search_service:
             self.search_service.index_document(memory_document(memory))
         self._record_audit(
@@ -207,10 +216,12 @@ class MemoryCoreService:
 
     def list_wiki_pages(self) -> list[WikiPageRecord]:
         items = [WikiPageRecord.model_validate(item) for item in self.kv.list(KV.wiki_pages)]
+        items = [self._hydrate_project_scope(item, KV.wiki_pages) for item in items]
         return sorted(items, key=lambda item: item.updatedAt)
 
     def list_knowledge(self) -> list[KnowledgeRecord]:
         items = [KnowledgeRecord.model_validate(item) for item in self.kv.list(KV.knowledge)]
+        items = [self._hydrate_project_scope(item, KV.knowledge) for item in items]
         return sorted(items, key=lambda item: item.updatedAt)
 
     def list_insights(self) -> list[InsightRecord]:
@@ -219,6 +230,7 @@ class MemoryCoreService:
 
     def list_wiki_jobs(self) -> list[WikiUpdateJobRecord]:
         items = [WikiUpdateJobRecord.model_validate(item) for item in self.kv.list(KV.wiki_update_jobs)]
+        items = [self._hydrate_project_scope(item, KV.wiki_update_jobs) for item in items]
         return sorted(items, key=lambda item: item.createdAt)
 
     def list_pinned_memory(self, scope: MemoryScope | None = None, project_id: str | None = None) -> list[PinnedMemoryRecord]:
@@ -398,27 +410,6 @@ class MemoryCoreService:
                 pages.append(page)
             knowledge.extend(distilled)
         return WikiUpdateResponse(jobs=processed, pages=pages, knowledge=_unique_knowledge_records(knowledge))
-
-    async def run_wiki_worker(self, stop_event: asyncio.Event, interval_seconds: float = 10.0) -> None:
-        while not stop_event.is_set():
-            await asyncio.to_thread(self.process_wiki_updates, WikiUpdateRequest(limit=5))
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-            except TimeoutError:
-                pass
-
-    async def run_maintenance_worker(
-        self,
-        stop_event: asyncio.Event,
-        interval_seconds: float = 10.0,
-        limit: int = 25,
-    ) -> None:
-        while not stop_event.is_set():
-            await asyncio.to_thread(self.run_maintenance, MaintenanceRunRequest(limit=limit))
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-            except TimeoutError:
-                pass
 
     def list_index_jobs(self) -> list[IndexJobRecord]:
         items = [IndexJobRecord.model_validate(item) for item in self.kv.list(KV.index_jobs)]
@@ -1013,7 +1004,12 @@ class MemoryCoreService:
             job, summary, candidates = process_observation(observation=observation, llm=self.llm, job=job)
             if summary:
                 self.kv.set(KV.summaries, summary.id, summary.model_dump())
-                self._enqueue_wiki_job([f"summary:{summary.id}"])
+                self._enqueue_wiki_job(
+                    [f"summary:{summary.id}"],
+                    scope=summary.scope,
+                    project=summary.project,
+                    project_id=summary.projectId,
+                )
                 if self.search_service:
                     self.search_service.index_document(summary_document(summary, observation))
             for candidate in candidates:
@@ -1087,11 +1083,56 @@ class MemoryCoreService:
         self.kv.set(KV.wiki_update_jobs, job.id, job.model_dump())
         return job
 
+    def _hydrate_project_scope(self, record, scope: str):
+        if getattr(record, "scope", None) == "global" or getattr(record, "projectId", None):
+            return record
+        resolved = self._project_scope_from_source_ids(getattr(record, "sourceIds", []))
+        if not resolved:
+            return record
+        record.scope = "project"
+        record.project = resolved.project
+        record.projectId = resolved.projectId
+        self.kv.set(scope, record.id, record.model_dump())
+        return record
+
+    def _project_scope_from_source_ids(self, source_ids: list[str]) -> ObservationRecord | SummaryRecord | MemoryRecord | KnowledgeRecord | None:
+        resolved: ObservationRecord | SummaryRecord | MemoryRecord | KnowledgeRecord | None = None
+        resolved_project_id: str | None = None
+        for source_id in source_ids:
+            source_type, _, source_key = source_id.partition(":")
+            if not source_key:
+                continue
+            source: ObservationRecord | SummaryRecord | MemoryRecord | KnowledgeRecord | None = None
+            if source_type == "observation":
+                source = self._observation_by_id(source_key)
+            elif source_type == "summary":
+                raw = self.kv.get(KV.summaries, source_key)
+                source = SummaryRecord.model_validate(raw) if raw else None
+            elif source_type == "memory":
+                raw = self.kv.get(KV.memories, source_key)
+                source = MemoryRecord.model_validate(raw) if raw else None
+            elif source_type == "knowledge":
+                raw = self.kv.get(KV.knowledge, source_key)
+                source = KnowledgeRecord.model_validate(raw) if raw else None
+            if source and getattr(source, "scope", "project") == "project" and source.projectId:
+                if resolved_project_id and resolved_project_id != source.projectId:
+                    return None
+                resolved = source
+                resolved_project_id = source.projectId
+        return resolved
+
+    def _resolve_wiki_job_scope(self, job: WikiUpdateJobRecord) -> WikiUpdateJobRecord:
+        hydrated = self._hydrate_project_scope(job, KV.wiki_update_jobs)
+        if isinstance(hydrated, WikiUpdateJobRecord):
+            return hydrated
+        return job
+
     def _process_wiki_job(
         self,
         job: WikiUpdateJobRecord,
     ) -> tuple[WikiUpdateJobRecord, WikiPageRecord | None, list[KnowledgeRecord]]:
         now = utc_now_iso()
+        job = self._resolve_wiki_job_scope(job)
         job.status = "running"
         job.attempts += 1
         job.updatedAt = now

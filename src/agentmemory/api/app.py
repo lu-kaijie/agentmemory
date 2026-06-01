@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-from contextlib import asynccontextmanager
 from importlib import resources
 
 from fastapi import FastAPI, HTTPException
@@ -26,8 +24,6 @@ from agentmemory.core.models import (
     WikiConsolidateRequest,
     WikiFileAnswerRequest,
     WikiReflectRequest,
-    WikiRebuildRequest,
-    WikiUpdateRequest,
 )
 from agentmemory.core.search import MemorySearchService
 from agentmemory.core.service import MemoryNotFoundError
@@ -44,34 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return {"status_code": 200, "body": payload, "headers": {}}
         return payload
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        if resolved.maintenance_enabled:
-            stop_worker = asyncio.Event()
-            worker = asyncio.create_task(
-                app.state.memory_core.run_maintenance_worker(
-                    stop_worker,
-                    interval_seconds=resolved.maintenance_interval_seconds,
-                    limit=resolved.maintenance_limit,
-                ),
-            )
-            workers = [(stop_worker, worker)]
-        else:
-            stop_index_worker = asyncio.Event()
-            stop_wiki_worker = asyncio.Event()
-            workers = [
-                (stop_index_worker, asyncio.create_task(app.state.search_service.run_pending_worker(stop_index_worker))),
-                (stop_wiki_worker, asyncio.create_task(app.state.memory_core.run_wiki_worker(stop_wiki_worker))),
-            ]
-        try:
-            yield
-        finally:
-            for stop_event, _worker in workers:
-                stop_event.set()
-            for _stop_event, worker in workers:
-                await worker
-
-    app = FastAPI(title="AgentMemory", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="AgentMemory", version=__version__)
     app.state.settings = resolved
     app.state.kv = StateKV(resolved.db_path)
     app.state.providers = create_provider_bundle(resolved)
@@ -238,14 +207,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         items = app.state.memory_core.list_insights()
         return {"insights": [item.model_dump() for item in items]}
 
-    @app.post("/agentmemory/wiki/update")
-    def wiki_update(payload: WikiUpdateRequest | None = None) -> dict[str, object]:
-        return app.state.memory_core.process_wiki_updates(payload or WikiUpdateRequest()).model_dump()
-
-    @app.post("/agentmemory/wiki/rebuild")
-    def wiki_rebuild(payload: WikiRebuildRequest) -> dict[str, object]:
-        return app.state.memory_core.rebuild_wiki(payload).model_dump()
-
     @app.post("/agentmemory/wiki/consolidate")
     def wiki_consolidate(payload: WikiConsolidateRequest | None = None) -> dict[str, object]:
         return app.state.memory_core.consolidate_wiki(payload or WikiConsolidateRequest()).model_dump()
@@ -290,13 +251,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/agentmemory/index/status")
     def index_status() -> dict[str, object]:
         return app.state.memory_core.index_status().model_dump()
-
-    @app.post("/agentmemory/index/rebuild")
-    def index_rebuild() -> dict[str, object]:
-        return app.state.memory_core.index_rebuild()
-
-    @app.post("/agentmemory/index/repair")
-    def index_repair() -> dict[str, object]:
-        return app.state.memory_core.index_repair()
 
     return app

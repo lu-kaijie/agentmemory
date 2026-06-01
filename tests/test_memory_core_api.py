@@ -50,12 +50,10 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     smart = client.post("/agentmemory/smart-search", json={"query": "REST memory", "mode": "hybrid"})
     context = client.post("/agentmemory/context", json={"query": "REST memory", "sourceTypes": ["memory"]})
     index_status = client.get("/agentmemory/index/status")
-    index_repair = client.post("/agentmemory/index/repair")
-    index_rebuild = client.post("/agentmemory/index/rebuild")
     health_envelope = client.get("/agentmemory/health?envelope=true")
     exported = client.get("/agentmemory/export")
     wiki_jobs = client.get("/agentmemory/wiki/jobs")
-    wiki_update = client.post("/agentmemory/wiki/update", json={"limit": 1})
+    maintenance = client.post("/agentmemory/maintenance/run", json={"limit": 5})
     wiki_pages = client.get("/agentmemory/wiki/pages")
     wiki_consolidate = client.post("/agentmemory/wiki/consolidate", json={"limit": 10, "minEvidence": 1})
     wiki_file_answer = client.post(
@@ -70,7 +68,6 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     )
     wiki_insights = client.get("/agentmemory/wiki/insights")
     wiki_lint = client.post("/agentmemory/wiki/lint")
-    maintenance = client.post("/agentmemory/maintenance/run", json={"limit": 5})
 
     assert observe.status_code == 200
     assert "sessionId" not in observe.json()
@@ -98,8 +95,6 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert context.json()["confidence"] > 0
     assert index_status.status_code == 200
     assert index_status.json()["documents"] >= 2
-    assert index_repair.status_code == 200
-    assert index_rebuild.status_code == 200
     assert health_envelope.status_code == 200
     assert health_envelope.json()["status_code"] == 200
     assert "maintenance" in health_envelope.json()["body"]["config"]
@@ -108,8 +103,8 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert exported.json()["audit"][-1]["action"] == "export"
     assert wiki_jobs.status_code == 200
     assert wiki_jobs.json()["wikiUpdateJobs"]
-    assert wiki_update.status_code == 200
-    assert wiki_update.json()["jobs"][0]["status"] == "applied"
+    assert maintenance.status_code == 200
+    assert maintenance.json()["wiki"]["jobs"][0]["status"] == "applied"
     assert wiki_pages.status_code == 200
     assert wiki_pages.json()["wikiPages"][0]["content"] == "Stub wiki update"
     assert wiki_consolidate.status_code == 200
@@ -122,7 +117,6 @@ def test_rest_observe_remember_and_list_endpoints(tmp_path):
     assert wiki_insights.json()["insights"]
     assert wiki_lint.status_code == 200
     assert "issues" in wiki_lint.json()
-    assert maintenance.status_code == 200
     after_maintenance_jobs = client.get("/agentmemory/llm-processing-jobs")
     after_maintenance_summaries = client.get("/agentmemory/summaries")
     after_maintenance_candidates = client.get("/agentmemory/memory-candidates")
@@ -230,34 +224,11 @@ def test_rest_import_export_json_and_rejects_unsupported_version(tmp_path):
     assert rejected.json()["detail"]["error"] == "invalid_import"
 
 
-def test_rest_wiki_rebuild(tmp_path):
+def test_rest_single_processing_endpoints_are_not_public(tmp_path):
     app = create_app(ai_settings(tmp_path / "wiki-api.sqlite3"))
-    app.state.providers = type(
-        "Providers",
-        (),
-        {
-            "llm": StubLLMProvider(),
-            "embedding": StubEmbeddingProvider(),
-            "health_summary": lambda _self: {},
-        },
-    )()
-    app.state.memory_core.llm = app.state.providers.llm
-    app.state.search_service.embedding = app.state.providers.embedding
-    app.state.search_service.llm = app.state.providers.llm
     client = TestClient(app)
 
-    client.post("/agentmemory/remember", json={"content": "REST Wiki rebuild evidence.", "language": "en"})
-    rebuild = client.post("/agentmemory/wiki/rebuild", json={"all": True})
-    pages = client.get("/agentmemory/wiki/pages")
-    knowledge = client.get("/agentmemory/wiki/knowledge")
-    jobs = client.get("/agentmemory/wiki/jobs")
-
-    assert rebuild.status_code == 200
-    assert len(rebuild.json()["jobs"]) == 6
-    assert all(job["status"] == "applied" for job in rebuild.json()["jobs"])
-    assert len(pages.json()["wikiPages"]) == 6
-    knowledge_items = knowledge.json()["knowledge"]
-    assert {item["kind"] for item in knowledge_items} == {"semantic", "procedural", "lesson"}
-    assert all(item["kind"] != "crystal" for item in knowledge_items)
-    assert all(item["fingerprint"] for item in knowledge_items)
-    assert jobs.json()["wikiUpdateJobs"]
+    assert client.post("/agentmemory/wiki/update", json={"limit": 1}).status_code == 404
+    assert client.post("/agentmemory/wiki/rebuild", json={"all": True}).status_code == 404
+    assert client.post("/agentmemory/index/repair").status_code == 404
+    assert client.post("/agentmemory/index/rebuild").status_code == 404

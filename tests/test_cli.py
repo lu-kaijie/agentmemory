@@ -115,15 +115,13 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     context = runner.invoke(app, ["context", "CLI memory", "--source-types", "memory", "--json"])
     context_prompt = runner.invoke(app, ["context", "CLI memory", "--source-types", "memory"])
     index_status = runner.invoke(app, ["index", "status", "--json"])
-    index_repair = runner.invoke(app, ["index", "repair", "--json"])
-    index_rebuild = runner.invoke(app, ["index", "rebuild", "--json"])
     exported = runner.invoke(app, ["export", "--json"])
     export_file = tmp_path / "agentmemory-export.json"
     if exported.exit_code == 0:
         export_file.write_text(exported.output, encoding="utf-8")
     imported_duplicate = runner.invoke(app, ["import", "--file", str(export_file), "--json"])
     wiki_jobs = runner.invoke(app, ["wiki", "jobs", "--json"])
-    wiki_update = runner.invoke(app, ["wiki", "update", "--limit", "1", "--json"])
+    maintenance = runner.invoke(app, ["maintenance", "run", "--limit", "5", "--json"])
     wiki_knowledge = runner.invoke(app, ["wiki", "knowledge", "--json"])
     wiki_pages = runner.invoke(app, ["wiki", "pages", "--json"])
     wiki_consolidate = runner.invoke(app, ["wiki", "consolidate", "--min-evidence", "1", "--json"])
@@ -150,7 +148,6 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     wiki_lesson_recall = runner.invoke(app, ["wiki", "lesson-recall", "memory", "--json"])
     wiki_lint = runner.invoke(app, ["wiki", "lint", "--json"])
     wiki_reflect = runner.invoke(app, ["wiki", "reflect", "--json"])
-    maintenance = runner.invoke(app, ["maintenance", "run", "--limit", "5", "--json"])
 
     assert observe.exit_code == 0
     assert "Observation saved:" in observe.output
@@ -166,13 +163,10 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert context.exit_code == 0
     assert context_prompt.exit_code == 0
     assert index_status.exit_code == 0
-    assert index_repair.exit_code == 0
-    assert index_rebuild.exit_code == 0
     assert maintenance.exit_code == 0
     assert exported.exit_code == 0
     assert imported_duplicate.exit_code == 0
     assert wiki_jobs.exit_code == 0
-    assert wiki_update.exit_code == 0
     assert wiki_knowledge.exit_code == 0
     assert wiki_pages.exit_code == 0
     assert wiki_consolidate.exit_code == 0
@@ -196,7 +190,6 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     export_payload = json.loads(exported.output)
     import_payload = json.loads(imported_duplicate.output)
     wiki_jobs_payload = json.loads(wiki_jobs.output)
-    wiki_update_payload = json.loads(wiki_update.output)
     wiki_knowledge_payload = json.loads(wiki_knowledge.output)
     wiki_pages_payload = json.loads(wiki_pages.output)
     wiki_consolidate_payload = json.loads(wiki_consolidate.output)
@@ -240,7 +233,7 @@ def test_memory_core_cli_commands(monkeypatch, tmp_path):
     assert export_payload["memories"][0]["content"] == "CLI list commands support JSON output."
     assert export_payload["audit"][-1]["action"] == "export"
     assert wiki_jobs_payload["wikiUpdateJobs"]
-    assert wiki_update_payload["jobs"][0]["status"] == "applied"
+    assert maintenance_payload["wiki"]["jobs"][0]["status"] == "applied"
     assert {item["kind"] for item in wiki_knowledge_payload["knowledge"]} == {"semantic", "procedural", "lesson"}
     assert wiki_pages_payload["wikiPages"][0]["content"] == "Stub wiki update"
     assert set(wiki_consolidate_payload) == {"semantic", "procedural", "pages", "lintIssues", "skipped"}
@@ -292,31 +285,22 @@ def test_memory_governance_cli_commands(monkeypatch, tmp_path):
     assert json.loads(missing.output)["error"] == "memory_not_found"
 
 
-def test_wiki_cli_rebuild(monkeypatch, tmp_path):
+def test_single_processing_cli_commands_are_not_public(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTMEMORY_DB_PATH", str(tmp_path / "wiki-cli.sqlite3"))
     monkeypatch.setenv("AGENTMEMORY_VECTOR_DB_PATH", str(tmp_path / "vector"))
     _set_ai_env(monkeypatch)
     monkeypatch.setattr(cli_module, "create_provider_bundle", lambda _settings: _StubProviderBundle())
     runner = CliRunner()
 
-    remember = runner.invoke(app, ["remember", "--content", "CLI Wiki rebuild evidence.", "--language", "en"])
-    rebuild = runner.invoke(app, ["wiki", "rebuild", "--all", "--json"])
-    pages = runner.invoke(app, ["wiki", "pages", "--json"])
-    knowledge = runner.invoke(app, ["wiki", "knowledge", "--json"])
-    jobs = runner.invoke(app, ["wiki", "jobs", "--json"])
+    wiki_update = runner.invoke(app, ["wiki", "update", "--limit", "1", "--json"])
+    wiki_rebuild = runner.invoke(app, ["wiki", "rebuild", "--all", "--json"])
+    index_repair = runner.invoke(app, ["index", "repair", "--json"])
+    index_rebuild = runner.invoke(app, ["index", "rebuild", "--json"])
 
-    assert remember.exit_code == 0
-    assert rebuild.exit_code == 0
-    assert len(json.loads(rebuild.output)["pages"]) == 6
-    assert pages.exit_code == 0
-    assert len(json.loads(pages.output)["wikiPages"]) == 6
-    assert knowledge.exit_code == 0
-    knowledge_items = json.loads(knowledge.output)["knowledge"]
-    assert {item["kind"] for item in knowledge_items} == {"semantic", "procedural", "lesson"}
-    assert all(item["kind"] != "crystal" for item in knowledge_items)
-    assert all(item["fingerprint"] for item in knowledge_items)
-    assert jobs.exit_code == 0
-    assert json.loads(jobs.output)["wikiUpdateJobs"]
+    assert wiki_update.exit_code == 2
+    assert wiki_rebuild.exit_code == 2
+    assert index_repair.exit_code == 2
+    assert index_rebuild.exit_code == 2
 
 
 def test_memory_core_cli_commands_require_ai_settings(monkeypatch, tmp_path):

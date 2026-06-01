@@ -12,6 +12,7 @@ import {
   Pin,
   RefreshCw,
   Search,
+  Wrench,
 } from 'lucide-react'
 import styles from './App.module.css'
 
@@ -93,6 +94,8 @@ function App() {
   const [projectId, setProjectId] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [maintenanceRunning, setMaintenanceRunning] = useState(false)
+  const [maintenanceResult, setMaintenanceResult] = useState<AnyRecord | null>(null)
   const [query, setQuery] = useState('memory context Wiki knowledge')
   const [mode, setMode] = useState('hybrid')
   const [searchResult, setSearchResult] = useState<AnyRecord | null>(null)
@@ -177,6 +180,24 @@ function App() {
     if (kind === 'context') setContextResult(result)
   }
 
+  async function runMaintenance() {
+    setMaintenanceRunning(true)
+    setError('')
+    try {
+      const result = await api('/agentmemory/maintenance/run', {
+        method: 'POST',
+        body: JSON.stringify({ limit: data.health?.config?.maintenance?.limit ?? 25 }),
+      })
+      setMaintenanceResult(result)
+      await loadAll()
+      setTab('jobs')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMaintenanceRunning(false)
+    }
+  }
+
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
@@ -202,6 +223,10 @@ function App() {
           </div>
           <button className={styles.iconButton} onClick={loadAll} disabled={loading} aria-label="Refresh">
             <RefreshCw size={16} />
+          </button>
+          <button className={styles.primary} onClick={runMaintenance} disabled={maintenanceRunning} aria-label="Run maintenance">
+            <Wrench size={15} />
+            <span>{maintenanceRunning ? 'Processing' : 'Run Maintenance'}</span>
           </button>
         </div>
       </header>
@@ -248,11 +273,32 @@ function App() {
           {tab === 'wiki' && <RecordList title="Wiki Pages" records={filtered.wikiPages} />}
           {tab === 'knowledge' && <RecordList title="Knowledge" records={filtered.knowledge} />}
           {tab === 'jobs' && <RecordList title="Jobs" records={[...filtered.llmJobs, ...filtered.wikiJobs, ...filtered.candidates]} />}
+          {tab === 'jobs' && maintenanceResult ? <MaintenanceResult result={maintenanceResult} /> : null}
           {tab === 'audit' && <RecordList title="Audit" records={filtered.audit} />}
           {tab === 'graph' && <GraphView nodes={graph.nodes} edges={graph.edges} />}
         </section>
       </main>
     </div>
+  )
+}
+
+function MaintenanceResult({ result }: { result: AnyRecord }) {
+  const indexJobs = result.index?.jobs?.length ?? 0
+  const llmJobs = result.llm?.jobs?.length ?? 0
+  const wikiJobs = result.wiki?.jobs?.length ?? 0
+  const pages = result.wiki?.pages?.length ?? 0
+  const knowledge = result.wiki?.knowledge?.length ?? 0
+  const errors = result.errors?.length ?? 0
+  return (
+    <section className={styles.panel}>
+      <h2>Last Maintenance</h2>
+      <div className={styles.cards}>
+        <Stat label="Index Jobs" value={indexJobs} detail="processed" />
+        <Stat label="LLM Jobs" value={llmJobs} detail="processed" />
+        <Stat label="Wiki Jobs" value={wikiJobs} detail={`${pages} pages`} />
+        <Stat label="Knowledge" value={knowledge} detail={`${errors} errors`} />
+      </div>
+    </section>
   )
 }
 

@@ -4,12 +4,12 @@
 
 ## 总体架构
 
-AgentMemory 采用 Python + FastAPI + Typer 的本地服务架构，核心原则是“状态中心化、入口轻量化、派生任务异步化”。
+AgentMemory 采用 Python + FastAPI + Typer 的本地服务架构，核心原则是“状态中心化、入口轻量化、派生任务显式处理”。
 
 主要模块：
 
 - `src/agentmemory/config.py`：读取环境变量，管理默认值，输出脱敏配置摘要。
-- `src/agentmemory/api/app.py`：FastAPI 装配入口，提供 REST、Viewer 和后台 maintenance worker。
+- `src/agentmemory/api/app.py`：FastAPI 装配入口，提供 REST 和 Viewer。
 - `src/agentmemory/cli.py`：Typer CLI，供用户和 shell-capable agent 调用。
 - `src/agentmemory/core/models.py`：Pydantic 数据模型，定义请求、响应和状态记录。
 - `src/agentmemory/core/service.py`：核心业务服务，处理 observation、memory、Wiki、governance 和 maintenance。
@@ -44,7 +44,7 @@ FastAPI 用于 REST API 和 Viewer 托管。
 - Pydantic v2 能直接复用 core models。
 - OpenAPI、请求校验、错误响应和 TestClient 都是现成能力。
 - 适合本地服务和后续服务化部署。
-- lifespan 能自然承载后台 maintenance worker。
+- REST endpoint 和 Viewer 可以复用同一套 core service，触发一次性 maintenance。
 
 Viewer 开发时使用 Vite，构建后产物写入 `src/agentmemory/viewer/dist`。`GET /agentmemory/` 返回构建后的 `index.html`，`/agentmemory/assets/*` 返回静态资源。这样运行时仍只需要 `agentmemory serve`，不需要单独前端服务。
 
@@ -165,7 +165,7 @@ Embedding provider 负责：
 4. 创建 pending LLM processing job。
 5. 创建 Wiki update job。
 6. 写 audit。
-7. 请求立即返回；后台 maintenance worker 继续处理 embedding、LLM summary/candidates 和 Wiki update。
+7. 请求立即返回；embedding、LLM summary/candidates 和 Wiki update 留给手动 maintenance 一次性处理。
 
 如果 LLM 失败：
 
@@ -228,7 +228,7 @@ AgentMemory 的 RAG 是“记忆证据 RAG”，不是代码仓库全文 RAG。
 
 向量写入不阻塞业务写入。
 
-系统会创建 `embedding_update` index job，后台 worker 或 `maintenance run` 再调用 embedding provider，把向量写入 LanceDB。
+系统会创建 `embedding_update` index job，`maintenance run` 再调用 embedding provider，把向量写入 LanceDB。
 
 这样做的原因：
 
@@ -410,7 +410,7 @@ Wiki update job 包含：
 处理流程：
 
 1. observation、memory、summary 写入后创建 `wiki_update_job`。
-2. maintenance 或 `wiki update` 读取 pending jobs。
+2. `maintenance run` 读取 pending jobs。
 3. 收集 sourceIds 对应 evidence 和已有 Wiki 页面。
 4. 调用 LLM 生成结构化 proposal。
 5. 校验 proposal。
@@ -436,15 +436,13 @@ LLM Wiki 是沉淀层，回答“这些证据长期意味着什么”。
 
 ## Maintenance 和失败恢复
 
-AgentMemory 不要求外部队列或独立 cron。第一版使用轻量进程内 maintenance worker，并提供 CLI/REST 手动入口。
+AgentMemory 不要求外部队列或独立 cron。写入路径只保存 evidence 并排队派生任务；CLI、REST 和 Viewer 提供手动一次性 maintenance 入口。
 
 配置：
 
-- `AGENTMEMORY_MAINTENANCE_ENABLED`
-- `AGENTMEMORY_MAINTENANCE_INTERVAL_SECONDS`
 - `AGENTMEMORY_MAINTENANCE_LIMIT`
 
-手动入口：
+CLI：
 
 ```bash
 uv run agentmemory maintenance run --json
@@ -469,8 +467,8 @@ maintenance 会处理：
 
 - 写入路径保持快速。
 - LLM/embedding 临时失败不会丢源数据。
-- CLI、REST、后台 worker 使用同一套 service 方法。
-- 后续可替换为外部队列，但不影响现有业务模型。
+- CLI、REST、Viewer 使用同一套 service 方法。
+- 用户和 agent 可以在阶段性写入后低频触发重处理，避免高频写入时竞争重活。
 
 ## Governance：导出、导入、删除和审计
 
@@ -532,8 +530,6 @@ AGENTMEMORY_EMBEDDING_BASE_URL=https://api.openai.com/v1
 AGENTMEMORY_EMBEDDING_API_KEY=
 AGENTMEMORY_EMBEDDING_MODEL=
 
-AGENTMEMORY_MAINTENANCE_ENABLED=true
-AGENTMEMORY_MAINTENANCE_INTERVAL_SECONDS=10
 AGENTMEMORY_MAINTENANCE_LIMIT=25
 AGENTMEMORY_REST_ENVELOPE=false
 ```

@@ -291,8 +291,37 @@ def test_wiki_jobs_are_enqueued_and_applied(tmp_path):
     assert [item["kind"] for item in maintenance.wiki["knowledge"]] == ["semantic", "procedural", "lesson"]
     assert "Stub semantic knowledge" in {item.content for item in service.list_knowledge()}
     assert "Stub crystal digest" not in {item.content for item in service.list_knowledge()}
-    assert set(maintenance.wiki["jobs"][0]["sourceIds"]).issubset(set(service.list_wiki_pages()[0].sourceIds))
+    page_source_sets = [set(page.sourceIds) for page in service.list_wiki_pages()]
+    assert all(
+        any(set(job["sourceIds"]).issubset(page_sources) for page_sources in page_source_sets)
+        for job in maintenance.wiki["jobs"]
+    )
     assert "wiki_update" in [record.action for record in service.list_audit()]
+
+
+def test_wiki_records_inherit_project_scope_for_viewer_filters(tmp_path):
+    service = MemoryCoreService(StateKV(tmp_path / "memory.sqlite3"), llm=StubLLMProvider())
+
+    observed = service.observe(
+        ObserveRequest(
+            content="Home training prefers 45 minute low impact sessions.",
+            project="home-fitness",
+            cwd="/tmp/home-fitness",
+            language="en",
+        ),
+    )
+    project_id = observed.observation.projectId
+
+    jobs = service.list_wiki_jobs()
+    assert jobs[0].project == "home-fitness"
+    assert jobs[0].projectId == project_id
+
+    service.run_maintenance(MaintenanceRunRequest(limit=5))
+
+    assert service.list_wiki_pages()
+    assert service.list_knowledge()
+    assert {page.projectId for page in service.list_wiki_pages()} == {project_id}
+    assert {item.projectId for item in service.list_knowledge()} == {project_id}
 
 
 def test_wiki_processing_failure_preserves_source_data(tmp_path):

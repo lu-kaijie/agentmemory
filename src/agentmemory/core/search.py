@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -241,14 +240,6 @@ class MemorySearchService:
             if job.targetType == source_type and job.targetId == source_id:
                 self.kv.delete(KV.index_jobs, job.id)
         return existed
-
-    async def run_pending_worker(self, stop_event: asyncio.Event, interval_seconds: float = 1.0) -> None:
-        while not stop_event.is_set():
-            await asyncio.to_thread(self.process_pending, 25)
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-            except TimeoutError:
-                pass
 
     def process_pending(self, limit: int = 25) -> list[IndexJobRecord]:
         jobs = [

@@ -31,8 +31,6 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     vector_db_path: Path = DEFAULT_DATA_DIR / "vector"
     vector_table: str = "memory_vectors"
-    maintenance_enabled: bool = True
-    maintenance_interval_seconds: float = Field(default=10.0, ge=0.1)
     maintenance_limit: int = Field(default=25, ge=1, le=500)
     rest_envelope: bool = False
 
@@ -61,8 +59,6 @@ class Settings(BaseSettings):
                 "table": self.vector_table,
             },
             "maintenance": {
-                "enabled": self.maintenance_enabled,
-                "interval_seconds": self.maintenance_interval_seconds,
                 "limit": self.maintenance_limit,
             },
             "rest": {

@@ -25,8 +25,6 @@ from agentmemory.core.models import (
     WikiConsolidateRequest,
     WikiFileAnswerRequest,
     WikiReflectRequest,
-    WikiRebuildRequest,
-    WikiUpdateRequest,
 )
 from agentmemory.core.search import MemorySearchService
 from agentmemory.core.service import MemoryCoreService, MemoryNotFoundError
@@ -556,26 +554,6 @@ def index_status(json_output: bool = typer.Option(False, "--json", help="Output 
         )
 
 
-@index_app.command("rebuild")
-def index_rebuild(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
-    """Rebuild search indexes."""
-    result = _memory_core().index_rebuild()
-    if json_output:
-        _emit(result, True)
-    else:
-        typer.echo(f"Rebuilt {result['documents']} document(s)")
-
-
-@index_app.command("repair")
-def index_repair(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
-    """Repair missing or failed search indexes."""
-    result = _memory_core().index_repair()
-    if json_output:
-        _emit(result, True)
-    else:
-        typer.echo(f"Repaired {result['documents']} document(s)")
-
-
 @wiki_app.command("pages")
 def wiki_pages(json_output: bool = typer.Option(False, "--json", help="Output JSON.")) -> None:
     """List Wiki pages."""
@@ -733,31 +711,3 @@ def wiki_file_answer(
     else:
         typer.echo(f"Filed: {result['record']['id']}")
 
-
-@wiki_app.command("update")
-def wiki_update(
-    limit: int = typer.Option(10, "--limit", min=1, max=50),
-    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
-) -> None:
-    """Process pending Wiki update jobs."""
-    result = _memory_core().process_wiki_updates(WikiUpdateRequest(limit=limit)).model_dump()
-    if json_output:
-        _emit(result, True)
-    else:
-        typer.echo(f"Processed {len(result['jobs'])} wiki job(s), updated {len(result['pages'])} page(s)")
-
-
-@wiki_app.command("rebuild")
-def wiki_rebuild(
-    topic: str | None = typer.Option(None, "--topic", help="Wiki topic to rebuild."),
-    all_topics: bool = typer.Option(False, "--all", help="Rebuild all fixed Wiki topics."),
-    json_output: bool = typer.Option(False, "--json", help="Output JSON."),
-) -> None:
-    """Rebuild Wiki pages from existing memory evidence."""
-    result = _memory_core().rebuild_wiki(
-        WikiRebuildRequest(topic=topic, all=all_topics),  # type: ignore[arg-type]
-    ).model_dump()
-    if json_output:
-        _emit(result, True)
-    else:
-        typer.echo(f"Rebuilt {len(result['pages'])} wiki page(s)")
